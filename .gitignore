@@ -1,0 +1,30 @@
+# ── Dependencies ─────────────────────────────────────────────
+node_modules/
+
+# ── Environment — NEVER commit secrets ───────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Prisma generated client ───────────────────────────────────
+generated/
+
+# ── Uploaded media files ──────────────────────────────────────
+uploads/covers/*
+uploads/events/*
+uploads/profiles/*
+uploads/watermarks/*
+# Keep empty folder structure in repo
+!uploads/covers/.gitkeep
+!uploads/events/.gitkeep
+!uploads/profiles/.gitkeep
+!uploads/watermarks/.gitkeep
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

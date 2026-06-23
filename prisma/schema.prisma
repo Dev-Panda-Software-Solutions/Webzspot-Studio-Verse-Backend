@@ -1,0 +1,325 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  USER
+}
+
+enum TenantEventRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+// ============================================
+// SUPER ADMIN
+// ============================================
+model SuperAdmin {
+  super_admin_id           String   @id @default(uuid())
+  super_admin_name         String
+  super_admin_phone_number String
+  super_admin_email_id     String   @unique
+  profile_url              String?
+  role                     Role     @default(SUPER_ADMIN)
+  isactive                 Boolean  @default(true)
+  createdBy                String   @default("SYSTEM")
+  createdAt                DateTime @default(now())
+  updatedBy                String?
+  updatedAt                DateTime @updatedAt
+
+  login Login?
+
+}
+
+// ============================================
+// TENANT
+// ============================================
+model Tenant {
+  tenant_id             String   @id @default(uuid())
+  tenant_name           String
+  tenant_phone_number   String
+  tenant_email_id       String   @unique
+  tenant_studio_name    String
+  tenant_studio_address String
+  profile_url           String?
+  role                  Role     @default(ADMIN)
+  isactive              Boolean  @default(true)
+  createdBy             String   @default("SYSTEM")
+  createdAt             DateTime @default(now())
+  updatedBy             String?
+  updatedAt             DateTime @updatedAt
+
+  login           Login?
+  event_mapping      EventTenantMapping[]
+  tenant_settings    TenantSettings?
+  created_users      User[]
+  tenant_favourites  TenantFavouriteMediaMapping[]
+
+}
+
+// ============================================
+// USER
+// ============================================
+model User {
+  user_id              String   @id @default(uuid())
+  user_name            String
+  user_phone_number    String
+  user_email_id        String   @unique
+  validity_days        String
+  expiry_date          DateTime
+  profile_url          String?
+  role                 Role     @default(USER)
+  isactive             Boolean  @default(true)
+  created_by_tenant_id String?
+  createdBy            String
+  createdAt            DateTime @default(now())
+  updatedBy            String?
+  updatedAt            DateTime @updatedAt
+
+  login           Login?
+  event_mapping   EventUserMapping[]
+  favourite_media UserFavouriteMediaMapping[]
+  created_by      Tenant?  @relation(fields: [created_by_tenant_id], references: [tenant_id])
+
+  @@index([created_by_tenant_id])
+}
+
+// ============================================
+// LOGIN
+// ============================================
+model Login {
+  transid               String    @id @default(uuid())
+  username              String    @unique
+  password_hash         String
+  last_login_at         DateTime?
+  failed_login_attempts Int       @default(0)
+  locked_until          DateTime?
+  role                  Role?
+  isactive              Boolean   @default(true)
+  createdBy             String?
+  createdAt             DateTime  @default(now()) 
+  updatedBy             String?
+  updatedAt             DateTime  @updatedAt
+
+  super_admin_id String? @unique
+  tenant_id      String? @unique
+  user_id        String? @unique
+
+  super_admin SuperAdmin? @relation(fields: [super_admin_id], references: [super_admin_id])
+  tenant      Tenant?     @relation(fields: [tenant_id], references: [tenant_id])
+  user        User?       @relation(fields: [user_id], references: [user_id])
+
+}
+
+// ============================================
+// EVENT
+// ============================================
+model Event {
+  event_id                     String    @id @default(uuid())
+  event_name                   String
+  event_description            String?
+  event_date                   DateTime?
+  event_time                   String?
+  event_venue                  String?
+  event_organizer              String?
+  event_organizer_phone_number String?
+  event_organizer_email_id     String?
+  profile_url                  String?
+  isactive                     Boolean   @default(true)
+  createdBy                    String
+  createdAt                    DateTime  @default(now())
+  updatedBy                    String?
+  updatedAt                    DateTime  @updatedAt
+
+  tenant_mapping    EventTenantMapping[]
+  user_mapping      EventUserMapping[]
+  media_stages      MediaUploadStage[]
+  uploaded_media    UploadedMedia[]
+  user_favourites   UserFavouriteMediaMapping[]
+  tenant_favourites TenantFavouriteMediaMapping[]
+
+}
+
+// ============================================
+// EVENT TENANT MAPPING
+// ============================================
+model EventTenantMapping {
+  event_tenant_mapping_id String          @id @default(uuid())
+  event_id                String
+  tenant_id               String
+  collaboration_role      TenantEventRole @default(OWNER)
+  isactive                Boolean         @default(true)
+  createdBy               String
+  createdAt               DateTime        @default(now())
+  updatedBy               String?
+  updatedAt               DateTime        @updatedAt
+
+  event  Event  @relation(fields: [event_id], references: [event_id])
+  tenant Tenant @relation(fields: [tenant_id], references: [tenant_id])
+
+  @@index([event_id])
+  @@index([tenant_id])
+  @@index([event_id, tenant_id])
+}
+
+
+
+// ============================================
+// EVENT USER MAPPING
+// ============================================
+model EventUserMapping {
+  event_user_id  String    @id @default(uuid())
+  event_id       String
+  user_id        String
+  isactive       Boolean   @default(true)
+  access_start   DateTime?
+  access_expires DateTime?
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedBy      String?
+  updatedAt      DateTime  @updatedAt
+
+  event Event @relation(fields: [event_id], references: [event_id])
+  user  User  @relation(fields: [user_id], references: [user_id])
+
+  @@index([event_id])
+  @@index([user_id])
+  @@index([event_id, user_id])
+}
+
+// ============================================
+// MEDIA UPLOAD STAGES
+// ============================================
+model MediaUploadStage {
+  media_upload_stage_id          String    @id @default(uuid())
+  event_id                       String
+  media_name                     String
+  media_type                     String
+  media_size                     String
+  media_upload_status            String    @default("Upload Just Started")
+  media_upload_start             String    @default("0")
+  media_upload_start_time        DateTime?
+  media_uploaded                 String    @default("0")
+  media_uploaded_time            DateTime?
+  media_compressed               String    @default("0")
+  media_compressed_time          DateTime?
+  media_original_uploaded        String    @default("0")
+  media_original_uploaded_time   DateTime?
+  media_original_server_path     String    @default("Not Uploaded Yet")
+  media_compressed_uploaded      String    @default("0")
+  media_compressed_uploaded_time DateTime?
+  media_compressed_server_path   String    @default("Not Uploaded Yet")
+  isactive                       Boolean   @default(true)
+  createdBy                      String
+  createdAt                      DateTime  @default(now())
+  updatedBy                      String?
+  updatedAt                      DateTime  @updatedAt
+
+  event          Event          @relation(fields: [event_id], references: [event_id])
+  uploaded_media UploadedMedia?
+
+}
+
+// ============================================
+// UPLOADED MEDIA
+// ============================================
+model UploadedMedia {
+  media_id               String   @id @default(uuid())
+  event_id               String?
+  media_upload_stage_id  String?  @unique
+  media_name             String
+  media_type             String
+  media_size             String
+  original_size          String?
+  media_server_path      String
+  compressed_server_path String
+  isactive               Boolean  @default(true)
+  createdBy              String
+  createdAt              DateTime @default(now())
+  updatedBy              String?
+  updatedAt              DateTime @updatedAt
+
+  event             Event?                           @relation(fields: [event_id], references: [event_id])
+  upload_stages     MediaUploadStage?                @relation(fields: [media_upload_stage_id], references: [media_upload_stage_id])
+  favourites        UserFavouriteMediaMapping[]
+  tenant_favourites TenantFavouriteMediaMapping[]
+
+}
+
+// ============================================
+// USER FAVOURITE MEDIA MAPPING
+// ============================================
+model UserFavouriteMediaMapping {
+  user_favourite_media_id String   @id @default(uuid())
+  event_id                String
+  user_id                 String
+  media_id                String
+  isactive                Boolean  @default(true)
+  createdBy               String
+  createdAt               DateTime @default(now())
+  updatedBy               String?
+  updatedAt               DateTime @updatedAt
+
+  event Event         @relation(fields: [event_id], references: [event_id])
+  user  User          @relation(fields: [user_id], references: [user_id])
+  media UploadedMedia @relation(fields: [media_id], references: [media_id])
+
+  @@unique([event_id, user_id, media_id])
+  @@index([event_id, user_id])
+}
+
+// ============================================
+// TENANT SETTINGS
+// ============================================
+model TenantSettings {
+  tenant_settings_id    String   @id @default(uuid())
+  tenant_id             String?  @unique
+  tenant_watermark_path String?
+  isactive              Boolean  @default(true)
+  createdBy             String
+  createdAt             DateTime @default(now())
+  updatedBy             String?
+  updatedAt             DateTime @updatedAt
+
+  tenant Tenant? @relation(fields: [tenant_id], references: [tenant_id])
+
+}
+
+// ============================================
+// TENANT FAVOURITE MEDIA MAPPING
+// ============================================
+model TenantFavouriteMediaMapping {
+  tenant_favourite_id String   @id @default(uuid())
+  event_id            String
+  tenant_id           String
+  media_id            String
+  isactive            Boolean  @default(true)
+  createdBy           String
+  createdAt           DateTime @default(now())
+  updatedBy           String?
+  updatedAt           DateTime @updatedAt
+
+  event  Event         @relation(fields: [event_id], references: [event_id])
+  tenant Tenant        @relation(fields: [tenant_id], references: [tenant_id])
+  media  UploadedMedia @relation(fields: [media_id], references: [media_id])
+
+  @@unique([event_id, tenant_id, media_id])
+  @@index([event_id, tenant_id])
+}
+
+// ============================================
+// JWT BLOCKLIST (invalidated tokens)
+// ============================================
+model TokenBlocklist {
+  jti       String   @id
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}

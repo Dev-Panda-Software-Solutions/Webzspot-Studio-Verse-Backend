@@ -152,7 +152,7 @@ const tenantSignup = async (req, res) => {
         const jti = crypto.randomUUID()
         const token = jwt.sign({ id: loginRecord.transid, role: "ADMIN", jti }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN })
 
-        return successResponse(res, { tenant, token, role: "ADMIN" }, 'Signup Successful. Welcome to Studio-Verse!', 201)
+        return successResponse(res, { tenant, token, role: "ADMIN" }, 'Signup Successful. Welcome to Webzspot Studio!', 201)
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }

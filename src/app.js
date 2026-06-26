@@ -103,7 +103,7 @@ app.use("/uploads/covers",     express.static(path.join(__dirname, "../uploads/c
 app.use("/uploads/profiles",   express.static(path.join(__dirname, "../uploads/profiles"),   staticOpts))
 
 app.get("/", (req, res) => {
-    res.json({ message: "Studio-Verse API is Alive." })
+    res.json({ message: "Webzspot Studio API is Alive." })
 })
 
 // Global error handler — catches multer rejections, unhandled throws, and anything else

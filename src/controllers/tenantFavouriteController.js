@@ -18,13 +18,20 @@ const addTenantFavourite = async (req, res) => {
         if (!eventAccess) return errorResponse(res, 'You do not have access to this event.', 403)
         if (!media) return errorResponse(res, 'Media not found in this event.', 404)
 
-        const favourite = await prisma.tenantFavouriteMediaMapping.upsert({
-            where: { event_id_tenant_id_media_id: { event_id, tenant_id, media_id } },
-            update: { isactive: true, updatedBy: req.user?.id },
-            create: { event_id, tenant_id, media_id, createdBy: req.user?.id }
+        const existing = await prisma.tenantFavouriteMediaMapping.findFirst({
+            where: { event_id, tenant_id, media_id }
         })
+        const favourite = existing
+            ? await prisma.tenantFavouriteMediaMapping.update({
+                where: { tenant_favourite_id: existing.tenant_favourite_id },
+                data: { isactive: true, updatedBy: req.user?.id }
+            })
+            : await prisma.tenantFavouriteMediaMapping.create({
+                data: { event_id, tenant_id, media_id, createdBy: req.user?.id }
+            })
         return successResponse(res, favourite, 'Added to studio favourites.', 201)
     } catch (err) {
+        console.error("[TenantFavourites] Add failed:", err)
         return errorResponse(res, sanitizePrismaError(err))
     }
 }

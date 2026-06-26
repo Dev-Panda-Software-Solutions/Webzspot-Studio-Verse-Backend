@@ -61,11 +61,12 @@ const getTenantFavouritesForEvent = async (req, res) => {
             select: {
                 tenant_favourite_id: true,
                 media_id: true,
-                media: { select: { media_id: true, media_name: true, media_type: true, media_size: true, original_size: true } }
+                media: { select: { media_id: true, media_name: true, media_type: true, media_size: true } }
             }
         })
         return successResponse(res, favourites)
     } catch (err) {
+        console.error("[TenantFavourites] Failed:", err)
         return errorResponse(res, sanitizePrismaError(err))
     }
 }

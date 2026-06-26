@@ -184,7 +184,7 @@ const serveMedia = async (req, res) => {
                 }
             }
 
-            const streamUrl = `/api/media/view/${req.params.token}`
+            const streamUrl = "?raw=1"
 
             // Validate watermark is a safe relative upload path before embedding in HTML
             if (watermarkUrl && !/^\/uploads\//.test(watermarkUrl)) watermarkUrl = null
@@ -208,7 +208,7 @@ video{max-width:100vw;max-height:100vh;display:block;outline:none}
 <div id="wrap">
 <video id="vid" controls controlslist="nodownload nofullscreen"
   disablepictureinpicture disableremoteplayback oncontextmenu="return false">
-  <source src="${safeStream}?raw=1" type="${escHtml(contentType)}">
+  <source src="${safeStream}" type="${escHtml(contentType)}">
 </video>
 ${safeWm ? `<img id="wm" src="${safeWm}" draggable="false" oncontextmenu="return false">` : ''}
 </div>
@@ -244,7 +244,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;min-
 audio{width:420px;max-width:90vw;outline:none}
 </style></head><body>
 <audio controls controlslist="nodownload" oncontextmenu="return false">
-  <source src="${safeStream}?raw=1" type="${escHtml(contentType)}">
+  <source src="${safeStream}" type="${escHtml(contentType)}">
 </audio>
 <script>document.addEventListener('contextmenu',e=>e.preventDefault())</script>
 </body></html>` : `<!DOCTYPE html>
@@ -267,9 +267,9 @@ img.onload=function(){
   const scale=Math.min(vw/img.naturalWidth,vh/img.naturalHeight);
   wrap.style.width=Math.round(img.naturalWidth*scale)+'px';
   wrap.style.height=Math.round(img.naturalHeight*scale)+'px';
-  wrap.style.backgroundImage="url('${safeStream}?raw=1')";
+  wrap.style.backgroundImage="url('${safeStream}')";
 };
-img.src='${safeStream}?raw=1';
+img.src='${safeStream}';
 </script>
 </body></html>`
             res.setHeader("Content-Type", "text/html; charset=utf-8")

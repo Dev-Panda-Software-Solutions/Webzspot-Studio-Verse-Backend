@@ -63,7 +63,7 @@ app.use((req, res, next) => {
 })
 
 app.use(helmet({
-    crossOriginResourcePolicy: { policy: "same-origin" },
+    crossOriginResourcePolicy: { policy: "cross-origin" },
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],

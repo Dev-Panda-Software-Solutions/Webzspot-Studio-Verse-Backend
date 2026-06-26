@@ -1,5 +1,6 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { parseAccessStart, parseAccessExpiry } = require("../utils/eventAccess")
 
 const assignUserToEvent = async (req, res) => {
     try {
@@ -29,8 +30,8 @@ const assignUserToEvent = async (req, res) => {
                     where: { event_user_id: existing.event_user_id },
                     data: {
                         isactive: true,
-                        access_start: access_start ? new Date(access_start) : null,
-                        access_expires: access_expires ? new Date(access_expires) : null,
+                        access_start: parseAccessStart(access_start),
+                        access_expires: parseAccessExpiry(access_expires),
                         updatedBy: req.user?.id,
                     }
                 })
@@ -45,8 +46,8 @@ const assignUserToEvent = async (req, res) => {
                     where: { event_user_id: existing.event_user_id },
                     data: {
                         isactive: true,
-                        access_start: access_start ? new Date(access_start) : null,
-                        access_expires: access_expires ? new Date(access_expires) : null,
+                        access_start: parseAccessStart(access_start),
+                        access_expires: parseAccessExpiry(access_expires),
                         updatedBy: req.user?.id,
                     }
                 })
@@ -57,8 +58,8 @@ const assignUserToEvent = async (req, res) => {
         const mapping = await prisma.eventUserMapping.create({
             data: {
                 event_id, user_id,
-                access_start: access_start ? new Date(access_start) : null,
-                access_expires: access_expires ? new Date(access_expires) : null,
+                access_start: parseAccessStart(access_start),
+                access_expires: parseAccessExpiry(access_expires),
                 createdBy: req.user?.id || "SYSTEM",
             }
         })
@@ -86,8 +87,8 @@ const updateEventUserMapping = async (req, res) => {
         }
 
         const updateData = { updatedBy: req.user?.id }
-        if (access_start !== undefined) updateData.access_start = access_start ? new Date(access_start) : null
-        if (access_expires !== undefined) updateData.access_expires = access_expires ? new Date(access_expires) : null
+        if (access_start !== undefined) updateData.access_start = parseAccessStart(access_start)
+        if (access_expires !== undefined) updateData.access_expires = parseAccessExpiry(access_expires)
         if (isactive !== undefined) updateData.isactive = Boolean(isactive)
 
         const updated = await prisma.eventUserMapping.update({

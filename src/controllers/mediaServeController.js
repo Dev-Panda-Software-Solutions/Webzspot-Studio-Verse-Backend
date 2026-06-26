@@ -5,6 +5,7 @@ const archiver = require("archiver")
 const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { activeUserEventAccessWhere } = require("../utils/eventAccess")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
 
@@ -84,7 +85,7 @@ const getMediaToken = async (req, res) => {
 
         if (loginRecord.user_id) {
             const access = await prisma.eventUserMapping.findFirst({
-                where: { event_id: media.event_id, user_id: loginRecord.user_id, isactive: true }
+                where: activeUserEventAccessWhere({ event_id: media.event_id, user_id: loginRecord.user_id })
             })
             if (!access) return errorResponse(res, 'You do not have access to this media.', 403)
         }

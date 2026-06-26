@@ -1,5 +1,6 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { activeUserEventAccessWhere } = require("../utils/eventAccess")
 
 const addFavourite = async (req, res) => {
     try {
@@ -14,7 +15,7 @@ const addFavourite = async (req, res) => {
 
         // Check event access, media existence, and duplicate all in parallel
         const [eventAccess, media, existing] = await Promise.all([
-            prisma.eventUserMapping.findFirst({ where: { event_id, user_id, isactive: true } }),
+            prisma.eventUserMapping.findFirst({ where: activeUserEventAccessWhere({ event_id, user_id }) }),
             prisma.uploadedMedia.findFirst({ where: { media_id, event_id, isactive: true } }),
             prisma.userFavouriteMediaMapping.findFirst({ where: { event_id, user_id, media_id, isactive: true } })
         ])
@@ -43,6 +44,12 @@ const getFavouritesByUser = async (req, res) => {
             const loginRecord = await prisma.login.findUnique({ where: { transid: loginId } })
             if (!loginRecord) return errorResponse(res, 'Unauthorized.', 401)
             user_id = loginRecord.user_id
+            if (event_id) {
+                const access = await prisma.eventUserMapping.findFirst({
+                    where: activeUserEventAccessWhere({ event_id, user_id })
+                })
+                if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+            }
         } else if (role === "ADMIN") {
             const [loginRecord, targetUser] = await Promise.all([
                 prisma.login.findUnique({ where: { transid: loginId } }),

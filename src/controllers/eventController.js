@@ -3,6 +3,7 @@ const fs = require("fs")
 const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { activeUserEventAccessWhere } = require("../utils/eventAccess")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
 
@@ -82,7 +83,14 @@ const getAllEvents = async (req, res) => {
         }
 
         const loginRecord = await prisma.login.findUnique({ where: { transid: loginId } })
-        const where = { user_id: loginRecord?.user_id, isactive: true, event: { isactive: true } }
+        const now = new Date()
+        const where = {
+            user_id: loginRecord?.user_id,
+            isactive: true,
+            event: { isactive: true },
+            OR: [{ access_start: null }, { access_start: { lte: now } }],
+            AND: [{ OR: [{ access_expires: null }, { access_expires: { gte: now } }] }]
+        }
         const [mappings, total] = await Promise.all([
             prisma.eventUserMapping.findMany({ where, include: { event: true }, skip, take: limit, orderBy: { createdAt: 'desc' } }),
             prisma.eventUserMapping.count({ where })
@@ -118,7 +126,7 @@ const getEventById = async (req, res) => {
         if (role === "USER") {
             const loginRecord = await prisma.login.findUnique({ where: { transid: loginId } })
             const access = await prisma.eventUserMapping.findFirst({
-                where: { event_id, user_id: loginRecord?.user_id, isactive: true }
+                where: activeUserEventAccessWhere({ event_id, user_id: loginRecord?.user_id })
             })
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
         }

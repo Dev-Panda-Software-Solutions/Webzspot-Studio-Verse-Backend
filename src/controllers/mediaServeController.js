@@ -137,6 +137,8 @@ const getMediaToken = async (req, res) => {
 
 const serveMedia = async (req, res) => {
     try {
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin")
+        res.setHeader("Access-Control-Allow-Origin", "*")
         const { token } = req.params
 
         let decoded

@@ -5,6 +5,10 @@ const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 
+const MAX_LARGE_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const ALLOWED_EXTS = new Set([".jpeg", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi", ".mkv", ".mp3", ".wav"])
+
 const SAFE_MEDIA_SELECT = {
     media_id: true,
     event_id: true,
@@ -16,6 +20,30 @@ const SAFE_MEDIA_SELECT = {
     isactive: true,
     createdAt: true,
     updatedAt: true
+}
+
+const formatKb = (bytes) => `${((Number(bytes) || 0) / 1024).toFixed(2)} KB`
+
+const assertCanUploadToEvent = async (req, event_id) => {
+    if (!event_id || !UUID_REGEX.test(event_id)) return 'Invalid or missing event_id.'
+    const loginRecord = req.loginRecord
+    if (!loginRecord) return 'Unauthorized.'
+
+    if (req.user.role === "ADMIN") {
+        const access = await prisma.eventTenantMapping.findFirst({
+            where: { event_id, tenant_id: loginRecord.tenant_id, isactive: true }
+        })
+        if (!access) return 'You do not have access to this event.'
+    }
+
+    return null
+}
+
+const safeUploadName = (name) => {
+    const ext = path.extname(name || "").toLowerCase()
+    if (!ALLOWED_EXTS.has(ext)) return null
+    const base = path.basename(name, ext).replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 80) || "media"
+    return `${Date.now()}-${Math.round(Math.random() * 1e9)}-${base}${ext}`
 }
 
 const uploadMedia = async (req, res) => {
@@ -147,6 +175,143 @@ const uploadMedia = async (req, res) => {
     }
 }
 
+const initiateLargeUpload = async (req, res) => {
+    try {
+        const { event_id, file_name, file_type, file_size } = req.body
+        const accessError = await assertCanUploadToEvent(req, event_id)
+        if (accessError) return errorResponse(res, accessError, accessError === 'Unauthorized.' ? 401 : 403)
+
+        const size = Number(file_size)
+        if (!Number.isFinite(size) || size <= 0) return errorResponse(res, 'file_size is required.', 400)
+        if (size > MAX_LARGE_UPLOAD_BYTES) return errorResponse(res, 'File too large. Maximum allowed is 5GB per file.', 413)
+        if (!s3Storage.isConfigured()) return errorResponse(res, 'Private media storage is not configured.', 500)
+
+        const uploadName = safeUploadName(file_name)
+        if (!uploadName) return errorResponse(res, 'File type not allowed. Only images, videos and audio files are accepted.', 415)
+
+        const key = `events/${event_id}/original/${uploadName}`
+        const upload = await s3Storage.createMultipartUpload({ key, contentType: file_type })
+        const stage = await prisma.mediaUploadStage.create({
+            data: {
+                event_id,
+                media_name: file_name,
+                media_type: file_type || "application/octet-stream",
+                media_size: formatKb(size),
+                media_upload_status: "Multipart Upload Started",
+                media_upload_start: "1",
+                media_upload_start_time: new Date(),
+                createdBy: req.user?.id || "SYSTEM"
+            }
+        })
+
+        return successResponse(res, {
+            stage_id: stage.media_upload_stage_id,
+            upload_id: upload.uploadId,
+            key: upload.key,
+            max_file_size: MAX_LARGE_UPLOAD_BYTES
+        }, 'Large upload started.', 201)
+    } catch (err) {
+        console.error('[LargeUpload] initiate failed:', err)
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+const uploadLargePart = async (req, res) => {
+    try {
+        const { event_id, key, upload_id, part_number } = req.query
+        const accessError = await assertCanUploadToEvent(req, event_id)
+        if (accessError) return errorResponse(res, accessError, accessError === 'Unauthorized.' ? 401 : 403)
+        if (!key || !upload_id || !part_number) return errorResponse(res, 'key, upload_id and part_number are required.', 400)
+        if (!String(key).startsWith(`events/${event_id}/original/`)) return errorResponse(res, 'Invalid upload key.', 400)
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0) return errorResponse(res, 'Missing chunk body.', 400)
+
+        const part = await s3Storage.uploadPart({
+            key,
+            uploadId: upload_id,
+            partNumber: Number(part_number),
+            body: req.body
+        })
+
+        return successResponse(res, part, 'Chunk uploaded.')
+    } catch (err) {
+        console.error('[LargeUpload] part failed:', err)
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+const completeLargeUpload = async (req, res) => {
+    try {
+        const { event_id, stage_id, key, upload_id, file_name, file_type, file_size, parts } = req.body
+        const accessError = await assertCanUploadToEvent(req, event_id)
+        if (accessError) return errorResponse(res, accessError, accessError === 'Unauthorized.' ? 401 : 403)
+        if (!stage_id || !key || !upload_id || !Array.isArray(parts) || parts.length === 0) {
+            return errorResponse(res, 'stage_id, key, upload_id and parts are required.', 400)
+        }
+        if (!String(key).startsWith(`events/${event_id}/original/`)) return errorResponse(res, 'Invalid upload key.', 400)
+
+        const size = Number(file_size)
+        if (!Number.isFinite(size) || size <= 0) return errorResponse(res, 'file_size is required.', 400)
+        if (size > MAX_LARGE_UPLOAD_BYTES) return errorResponse(res, 'File too large. Maximum allowed is 5GB per file.', 413)
+
+        const mediaServerPath = await s3Storage.completeMultipartUpload({ key, uploadId: upload_id, parts })
+        const sizeLabel = formatKb(size)
+        const media = await prisma.uploadedMedia.create({
+            data: {
+                event_id,
+                media_upload_stage_id: stage_id,
+                media_name: file_name,
+                media_type: file_type || "application/octet-stream",
+                media_size: sizeLabel,
+                original_size: sizeLabel,
+                media_server_path: mediaServerPath,
+                compressed_server_path: mediaServerPath,
+                createdBy: req.user?.id || "SYSTEM"
+            },
+            select: SAFE_MEDIA_SELECT
+        })
+
+        await prisma.mediaUploadStage.update({
+            where: { media_upload_stage_id: stage_id },
+            data: {
+                media_upload_status: "Completed",
+                media_size: sizeLabel,
+                media_uploaded: "1",
+                media_uploaded_time: new Date(),
+                media_original_uploaded: "1",
+                media_original_uploaded_time: new Date(),
+                media_original_server_path: mediaServerPath,
+                media_compressed_uploaded: "0",
+                media_compressed_server_path: mediaServerPath,
+                updatedBy: req.user?.id || "SYSTEM"
+            }
+        })
+
+        return successResponse(res, media, 'Large media uploaded successfully.', 201)
+    } catch (err) {
+        console.error('[LargeUpload] complete failed:', err)
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+const abortLargeUpload = async (req, res) => {
+    try {
+        const { event_id, key, upload_id, stage_id } = req.body
+        const accessError = await assertCanUploadToEvent(req, event_id)
+        if (accessError) return errorResponse(res, accessError, accessError === 'Unauthorized.' ? 401 : 403)
+        if (key && upload_id) await s3Storage.abortMultipartUpload({ key, uploadId: upload_id })
+        if (stage_id) {
+            await prisma.mediaUploadStage.update({
+                where: { media_upload_stage_id: stage_id },
+                data: { media_upload_status: "Aborted", updatedBy: req.user?.id || "SYSTEM" }
+            }).catch(() => {})
+        }
+        return successResponse(res, null, 'Large upload aborted.')
+    } catch (err) {
+        console.error('[LargeUpload] abort failed:', err)
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
 const getAllMediaByEvent = async (req, res) => {
     try {
         const { event_id } = req.params
@@ -270,4 +435,14 @@ const hardDeleteMedia = async (req, res) => {
     }
 }
 
-module.exports = { uploadMedia, getAllMediaByEvent, getMediaById, deleteMedia, hardDeleteMedia }
+module.exports = {
+    uploadMedia,
+    initiateLargeUpload,
+    uploadLargePart,
+    completeLargeUpload,
+    abortLargeUpload,
+    getAllMediaByEvent,
+    getMediaById,
+    deleteMedia,
+    hardDeleteMedia
+}

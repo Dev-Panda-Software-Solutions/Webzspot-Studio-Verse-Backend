@@ -4,7 +4,11 @@ const {
     PutObjectCommand,
     GetObjectCommand,
     HeadObjectCommand,
-    DeleteObjectCommand
+    DeleteObjectCommand,
+    CreateMultipartUploadCommand,
+    UploadPartCommand,
+    CompleteMultipartUploadCommand,
+    AbortMultipartUploadCommand
 } = require("@aws-sdk/client-s3")
 
 const bucket = process.env.AWS_S3_BUCKET || process.env.S3_BUCKET
@@ -88,11 +92,68 @@ const deleteObject = async (s3Path) => {
     }))
 }
 
+const createMultipartUpload = async ({ key, contentType }) => {
+    if (!isConfigured()) throw new Error("S3 storage is not configured.")
+
+    const result = await client.send(new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: contentType || "application/octet-stream"
+    }))
+
+    return { uploadId: result.UploadId, key, s3Path: toS3Path(key) }
+}
+
+const uploadPart = async ({ key, uploadId, partNumber, body }) => {
+    if (!isConfigured()) throw new Error("S3 storage is not configured.")
+
+    const result = await client.send(new UploadPartCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+        Body: body
+    }))
+
+    return { PartNumber: partNumber, ETag: result.ETag }
+}
+
+const completeMultipartUpload = async ({ key, uploadId, parts }) => {
+    if (!isConfigured()) throw new Error("S3 storage is not configured.")
+
+    await client.send(new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+        MultipartUpload: {
+            Parts: parts
+                .map(part => ({ PartNumber: Number(part.PartNumber), ETag: part.ETag }))
+                .sort((a, b) => a.PartNumber - b.PartNumber)
+        }
+    }))
+
+    return toS3Path(key)
+}
+
+const abortMultipartUpload = async ({ key, uploadId }) => {
+    if (!isConfigured() || !key || !uploadId) return
+
+    await client.send(new AbortMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId
+    }))
+}
+
 module.exports = {
     isConfigured,
     isS3Path,
     uploadFile,
     headObject,
     getObjectStream,
-    deleteObject
+    deleteObject,
+    createMultipartUpload,
+    uploadPart,
+    completeMultipartUpload,
+    abortMultipartUpload
 }

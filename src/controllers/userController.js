@@ -6,9 +6,10 @@ const createUser = async (req, res) => {
     try {
         const { user_name, user_phone_number, user_email_id, validity_days, expiry_date, profile_url, username, password } = req.body
 
+        const normalizedEmail = user_email_id?.trim() || null
         const [existingLogin, existingEmail, loginRecord] = await Promise.all([
             prisma.login.findFirst({ where: { username } }),
-            prisma.user.findFirst({ where: { user_email_id } }),
+            normalizedEmail ? prisma.user.findFirst({ where: { user_email_id: normalizedEmail } }) : null,
             prisma.login.findUnique({ where: { transid: req.user?.id } })
         ])
         if (existingLogin) return errorResponse(res, 'Username already taken. Choose another.', 400)
@@ -18,7 +19,17 @@ const createUser = async (req, res) => {
         const created_by_tenant_id = loginRecord?.tenant_id || null
 
         const user = await prisma.user.create({
-            data: { user_name, user_phone_number, user_email_id, validity_days: String(validity_days ?? ''), expiry_date: new Date(expiry_date), profile_url, role: "USER", created_by_tenant_id, createdBy: req.user?.id || "SYSTEM" }
+            data: {
+                user_name,
+                user_phone_number: user_phone_number?.trim() || null,
+                user_email_id: normalizedEmail,
+                validity_days: String(validity_days ?? ''),
+                expiry_date: new Date(expiry_date),
+                profile_url,
+                role: "USER",
+                created_by_tenant_id,
+                createdBy: req.user?.id || "SYSTEM"
+            }
         })
 
         await prisma.login.create({
@@ -37,9 +48,10 @@ const createUserInEvent = async (req, res) => {
 
         if (!event_id) return errorResponse(res, 'event_id is required.', 400)
 
+        const normalizedEmail = user_email_id?.trim() || null
         const [existingLogin, existingEmail, loginRecord] = await Promise.all([
             prisma.login.findFirst({ where: { username } }),
-            prisma.user.findFirst({ where: { user_email_id } }),
+            normalizedEmail ? prisma.user.findFirst({ where: { user_email_id: normalizedEmail } }) : null,
             prisma.login.findUnique({ where: { transid: req.user?.id } })
         ])
         if (existingLogin) return errorResponse(res, 'Username already taken. Choose another.', 400)
@@ -57,7 +69,17 @@ const createUserInEvent = async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10)
 
         const user = await prisma.user.create({
-            data: { user_name, user_phone_number, user_email_id, validity_days: String(validity_days ?? ''), expiry_date: new Date(expiry_date), profile_url, role: "USER", created_by_tenant_id, createdBy: req.user?.id || "SYSTEM" }
+            data: {
+                user_name,
+                user_phone_number: user_phone_number?.trim() || null,
+                user_email_id: normalizedEmail,
+                validity_days: String(validity_days ?? ''),
+                expiry_date: new Date(expiry_date),
+                profile_url,
+                role: "USER",
+                created_by_tenant_id,
+                createdBy: req.user?.id || "SYSTEM"
+            }
         })
 
         await Promise.all([

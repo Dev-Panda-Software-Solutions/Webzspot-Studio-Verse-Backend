@@ -70,8 +70,8 @@ model Tenant {
 model User {
   user_id              String   @id @default(uuid())
   user_name            String
-  user_phone_number    String
-  user_email_id        String   @unique
+  user_phone_number    String?
+  user_email_id        String?  @unique
   validity_days        String
   expiry_date          DateTime
   profile_url          String?

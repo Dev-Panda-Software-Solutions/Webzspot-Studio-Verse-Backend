@@ -89,6 +89,7 @@ const uploadMedia = async (req, res) => {
 
         const originalPath = file.path
         const isImage = /\.(jpeg|jpg|png|gif)$/i.test(path.extname(file.originalname))
+        let compressedImageCreated = false
         let compressedPath = originalPath
 
         // 2 — Compress if image
@@ -98,10 +99,17 @@ const uploadMedia = async (req, res) => {
             const baseName = path.basename(originalPath, path.extname(originalPath))
             compressedPath = path.join(compressedDir, `${baseName}.jpg`)
 
-            await sharp(originalPath)
-                .resize({ width: 1200, withoutEnlargement: true })
-                .jpeg({ quality: 70 })
-                .toFile(compressedPath)
+            try {
+                await sharp(originalPath, { failOn: "none" })
+                    .rotate()
+                    .resize({ width: 1200, withoutEnlargement: true })
+                    .jpeg({ quality: 70 })
+                    .toFile(compressedPath)
+                compressedImageCreated = true
+            } catch (compressErr) {
+                console.warn(`[Upload] Compression skipped for ${file.originalname}:`, compressErr.message)
+                compressedPath = originalPath
+            }
         }
 
         const compressedTime = new Date()
@@ -114,7 +122,7 @@ const uploadMedia = async (req, res) => {
         let compressedServerPath = compressedPath
 
         const originalKey = `events/${event_id}/original/${path.basename(originalPath)}`
-        const compressedKey = isImage
+        const compressedKey = compressedImageCreated
             ? `events/${event_id}/compressed/${path.basename(compressedPath)}`
             : originalKey
 
@@ -124,7 +132,7 @@ const uploadMedia = async (req, res) => {
             contentType: file.mimetype
         })
 
-        compressedServerPath = isImage
+        compressedServerPath = compressedImageCreated
             ? await s3Storage.uploadFile({
                 localPath: compressedPath,
                 key: compressedKey,
@@ -154,20 +162,20 @@ const uploadMedia = async (req, res) => {
             data: {
                 media_upload_status: "Completed",
                 media_size: finalSize,
-                media_compressed: isImage ? "1" : "0",
-                media_compressed_time: isImage ? compressedTime : null,
+                media_compressed: compressedImageCreated ? "1" : "0",
+                media_compressed_time: compressedImageCreated ? compressedTime : null,
                 media_original_uploaded: "1",
                 media_original_uploaded_time: new Date(),
                 media_original_server_path: mediaServerPath,
-                media_compressed_uploaded: isImage ? "1" : "0",
-                media_compressed_uploaded_time: isImage ? new Date() : null,
+                media_compressed_uploaded: compressedImageCreated ? "1" : "0",
+                media_compressed_uploaded_time: compressedImageCreated ? new Date() : null,
                 media_compressed_server_path: isImage ? compressedServerPath : mediaServerPath,
                 updatedBy: req.user?.id || "SYSTEM"
             }
         })
 
         fs.unlink(originalPath, () => {})
-        if (isImage && compressedPath !== originalPath) fs.unlink(compressedPath, () => {})
+        if (compressedImageCreated && compressedPath !== originalPath) fs.unlink(compressedPath, () => {})
 
         return successResponse(res, media, 'Media Uploaded Successfully.', 201)
     } catch (err) {

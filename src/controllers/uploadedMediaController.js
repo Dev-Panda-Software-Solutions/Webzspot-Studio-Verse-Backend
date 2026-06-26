@@ -347,12 +347,18 @@ const getAllMediaByEvent = async (req, res) => {
         }
 
         const where = { event_id, isactive: true }
-        const [items, total] = await Promise.all([
+        const [items, total, allSizes] = await Promise.all([
             prisma.uploadedMedia.findMany({ where, select: SAFE_MEDIA_SELECT, skip, take: limit, orderBy: { createdAt: 'desc' } }),
-            prisma.uploadedMedia.count({ where })
+            prisma.uploadedMedia.count({ where }),
+            role !== 'USER'
+                ? prisma.uploadedMedia.findMany({ where, select: { media_size: true, original_size: true } })
+                : Promise.resolve([])
         ])
 
-        return successResponse(res, { items, total, page, limit, pages: Math.ceil(total / limit) })
+        const total_media_kb = allSizes.reduce((s, m) => s + (parseFloat(m.media_size) || 0), 0)
+        const total_original_kb = allSizes.reduce((s, m) => s + (parseFloat(m.original_size) || 0), 0)
+
+        return successResponse(res, { items, total, page, limit, pages: Math.ceil(total / limit), total_media_kb, total_original_kb })
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }

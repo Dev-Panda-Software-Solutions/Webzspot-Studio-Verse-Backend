@@ -86,7 +86,10 @@ const getAllUsers = async (req, res) => {
         }
 
         const [items, total] = await Promise.all([
-            prisma.user.findMany({ where, skip, take: limit }),
+            prisma.user.findMany({
+                where, skip, take: limit,
+                include: { created_by: { select: { tenant_studio_name: true } } }
+            }),
             prisma.user.count({ where })
         ])
 

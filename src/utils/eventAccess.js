@@ -3,23 +3,10 @@ const activeUserEventAccessWhere = ({ event_id, user_id, now = new Date() }) => 
     user_id,
     isactive: true,
     OR: [
-        { access_start: null },
-        { access_start: { lte: now } }
-    ],
-    AND: [
-        {
-            OR: [
-                { access_expires: null },
-                { access_expires: { gte: now } }
-            ]
-        }
+        { access_expires: null },
+        { access_expires: { gte: now } }
     ]
 })
-
-const parseAccessStart = (value) => {
-    if (!value) return null
-    return new Date(value)
-}
 
 const parseAccessExpiry = (value) => {
     if (!value) return null
@@ -30,8 +17,4 @@ const parseAccessExpiry = (value) => {
     return new Date(value)
 }
 
-module.exports = {
-    activeUserEventAccessWhere,
-    parseAccessStart,
-    parseAccessExpiry
-}
+module.exports = { activeUserEventAccessWhere, parseAccessExpiry }

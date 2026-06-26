@@ -1,10 +1,10 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { parseAccessStart, parseAccessExpiry } = require("../utils/eventAccess")
+const { parseAccessExpiry } = require("../utils/eventAccess")
 
 const assignUserToEvent = async (req, res) => {
     try {
-        const { event_id, user_id, access_start, access_expires } = req.body
+        const { event_id, user_id, access_expires } = req.body
         if (!event_id || !user_id) return errorResponse(res, 'event_id and user_id are required.', 400)
 
         if (req.user.role === "ADMIN") {
@@ -23,14 +23,12 @@ const assignUserToEvent = async (req, res) => {
                 return errorResponse(res, 'You can only assign users you created to events.', 403)
             }
 
-            // If mapping exists but was revoked, restore it with new access dates
             if (existing) {
                 if (existing.isactive) return errorResponse(res, 'User is already assigned to this event.', 400)
                 const updated = await prisma.eventUserMapping.update({
                     where: { event_user_id: existing.event_user_id },
                     data: {
                         isactive: true,
-                        access_start: parseAccessStart(access_start),
                         access_expires: parseAccessExpiry(access_expires),
                         updatedBy: req.user?.id,
                     }
@@ -38,7 +36,6 @@ const assignUserToEvent = async (req, res) => {
                 return successResponse(res, updated, 'User Access Restored Successfully.', 200)
             }
         } else {
-            // SUPER_ADMIN path — also restore revoked mappings instead of creating duplicates
             const existing = await prisma.eventUserMapping.findFirst({ where: { event_id, user_id } })
             if (existing) {
                 if (existing.isactive) return errorResponse(res, 'User is already assigned to this event.', 400)
@@ -46,7 +43,6 @@ const assignUserToEvent = async (req, res) => {
                     where: { event_user_id: existing.event_user_id },
                     data: {
                         isactive: true,
-                        access_start: parseAccessStart(access_start),
                         access_expires: parseAccessExpiry(access_expires),
                         updatedBy: req.user?.id,
                     }
@@ -58,7 +54,6 @@ const assignUserToEvent = async (req, res) => {
         const mapping = await prisma.eventUserMapping.create({
             data: {
                 event_id, user_id,
-                access_start: parseAccessStart(access_start),
                 access_expires: parseAccessExpiry(access_expires),
                 createdBy: req.user?.id || "SYSTEM",
             }
@@ -69,11 +64,10 @@ const assignUserToEvent = async (req, res) => {
     }
 }
 
-// Update access dates or revoke/restore a user-event mapping
 const updateEventUserMapping = async (req, res) => {
     try {
         const { id } = req.params
-        const { access_start, access_expires, isactive } = req.body
+        const { access_expires, isactive } = req.body
 
         const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: id } })
         if (!mapping) return errorResponse(res, 'Mapping not found.', 404)
@@ -87,7 +81,6 @@ const updateEventUserMapping = async (req, res) => {
         }
 
         const updateData = { updatedBy: req.user?.id }
-        if (access_start !== undefined) updateData.access_start = parseAccessStart(access_start)
         if (access_expires !== undefined) updateData.access_expires = parseAccessExpiry(access_expires)
         if (isactive !== undefined) updateData.isactive = Boolean(isactive)
 
@@ -96,7 +89,7 @@ const updateEventUserMapping = async (req, res) => {
             data: updateData,
             select: {
                 event_user_id: true, isactive: true,
-                access_start: true, access_expires: true,
+                access_expires: true,
                 user: { select: { user_id: true, user_name: true, user_email_id: true } }
             }
         })
@@ -124,7 +117,6 @@ const getUsersByEvent = async (req, res) => {
                 event_user_id: true,
                 event_id: true,
                 isactive: true,
-                access_start: true,
                 access_expires: true,
                 createdAt: true,
                 user: { select: { user_id: true, user_name: true, user_email_id: true, user_phone_number: true } }

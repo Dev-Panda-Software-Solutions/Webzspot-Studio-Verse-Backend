@@ -65,10 +65,24 @@ const getAllEvents = async (req, res) => {
 
         if (role === "SUPER_ADMIN") {
             const where = { isactive: true }
-            const [items, total] = await Promise.all([
-                prisma.event.findMany({ where, skip, take: limit, orderBy: { createdAt: 'desc' } }),
+            const [rawItems, total] = await Promise.all([
+                prisma.event.findMany({
+                    where, skip, take: limit, orderBy: { createdAt: 'desc' },
+                    include: {
+                        tenant_mapping: {
+                            where: { collaboration_role: 'OWNER', isactive: true },
+                            include: { tenant: { select: { tenant_id: true, tenant_studio_name: true } } },
+                            take: 1
+                        }
+                    }
+                }),
                 prisma.event.count({ where })
             ])
+            const items = rawItems.map(e => ({
+                ...e,
+                owner_studio: e.tenant_mapping[0]?.tenant || null,
+                tenant_mapping: undefined
+            }))
             return successResponse(res, { items, total, page, limit, pages: Math.ceil(total / limit) })
         }
 
@@ -88,8 +102,7 @@ const getAllEvents = async (req, res) => {
             user_id: loginRecord?.user_id,
             isactive: true,
             event: { isactive: true },
-            OR: [{ access_start: null }, { access_start: { lte: now } }],
-            AND: [{ OR: [{ access_expires: null }, { access_expires: { gte: now } }] }]
+            OR: [{ access_expires: null }, { access_expires: { gte: now } }]
         }
         const [mappings, total] = await Promise.all([
             prisma.eventUserMapping.findMany({ where, include: { event: true }, skip, take: limit, orderBy: { createdAt: 'desc' } }),
@@ -100,7 +113,6 @@ const getAllEvents = async (req, res) => {
             ...m.event,
             _access: {
                 event_user_id: m.event_user_id,
-                access_start: m.access_start,
                 access_expires: m.access_expires,
             }
         }))

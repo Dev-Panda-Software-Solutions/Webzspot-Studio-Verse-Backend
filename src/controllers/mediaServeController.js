@@ -325,6 +325,9 @@ img.src='${safeStream}';
     }
 }
 
+const sanitizeFilename = (name) =>
+    (name || '').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'unknown'
+
 const downloadUserFavouritesAsZip = async (req, res) => {
     try {
         const { event_id, user_id } = req.params
@@ -339,15 +342,23 @@ const downloadUserFavouritesAsZip = async (req, res) => {
         })
         if (!tenantAccess) return errorResponse(res, 'You do not have access to this event.', 403)
 
-        const favourites = await prisma.userFavouriteMediaMapping.findMany({
-            where: { event_id, user_id, isactive: true },
-            include: { media: true }
-        })
+        const [favourites, eventRecord, userRecord] = await Promise.all([
+            prisma.userFavouriteMediaMapping.findMany({
+                where: { event_id, user_id, isactive: true },
+                include: { media: true }
+            }),
+            prisma.event.findUnique({ where: { event_id }, select: { event_name: true } }),
+            prisma.user.findUnique({ where: { user_id }, select: { user_name: true } })
+        ])
 
         if (favourites.length === 0) return errorResponse(res, 'No favourites found for this user.', 404)
 
+        const eventName = sanitizeFilename(eventRecord?.event_name)
+        const userName = sanitizeFilename(userRecord?.user_name)
+        const zipName = `${eventName}_(${userName}).zip`
+
         res.setHeader("Content-Type", "application/zip")
-        res.setHeader("Content-Disposition", `attachment; filename="favourites-${user_id}.zip"`)
+        res.setHeader("Content-Disposition", `attachment; filename="${zipName}"`)
         res.setHeader("Cache-Control", "no-store")
 
         const archive = archiver("zip", { zlib: { level: 9 } })
@@ -383,14 +394,23 @@ const downloadTenantFavouritesAsZip = async (req, res) => {
         })
         if (!tenantAccess) return errorResponse(res, 'You do not have access to this event.', 403)
 
-        const favourites = await prisma.tenantFavouriteMediaMapping.findMany({
-            where: { event_id, tenant_id: loginRecord.tenant_id, isactive: true },
-            include: { media: true }
-        })
+        const [favourites, eventRecord, tenantRecord] = await Promise.all([
+            prisma.tenantFavouriteMediaMapping.findMany({
+                where: { event_id, tenant_id: loginRecord.tenant_id, isactive: true },
+                include: { media: true }
+            }),
+            prisma.event.findUnique({ where: { event_id }, select: { event_name: true } }),
+            prisma.tenant.findUnique({ where: { tenant_id: loginRecord.tenant_id }, select: { tenant_studio_name: true } })
+        ])
+
         if (favourites.length === 0) return errorResponse(res, 'No studio favourites found for this event.', 404)
 
+        const eventName = sanitizeFilename(eventRecord?.event_name)
+        const studioName = sanitizeFilename(tenantRecord?.tenant_studio_name)
+        const zipName = `${eventName}_(${studioName}_Favourites).zip`
+
         res.setHeader("Content-Type", "application/zip")
-        res.setHeader("Content-Disposition", `attachment; filename="studio-favourites-${event_id}.zip"`)
+        res.setHeader("Content-Disposition", `attachment; filename="${zipName}"`)
         res.setHeader("Cache-Control", "no-store")
 
         const archive = archiver("zip", { zlib: { level: 9 } })

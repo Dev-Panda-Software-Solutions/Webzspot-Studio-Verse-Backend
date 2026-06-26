@@ -179,7 +179,6 @@ model EventUserMapping {
   event_id       String
   user_id        String
   isactive       Boolean   @default(true)
-  access_start   DateTime?
   access_expires DateTime?
   createdBy      String
   createdAt      DateTime  @default(now())

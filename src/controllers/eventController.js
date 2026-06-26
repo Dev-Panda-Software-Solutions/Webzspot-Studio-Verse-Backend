@@ -580,6 +580,7 @@ const getDashboardAnalytics = async (req, res) => {
             storage_summary,
         })
     } catch (err) {
+        console.error("[DashboardAnalytics] Failed:", err)
         return errorResponse(res, sanitizePrismaError(err))
     }
 }

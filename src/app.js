@@ -38,6 +38,16 @@ const { pruneExpired } = require("./utils/tokenBlocklist")
 
 const app = express()
 
+const trustProxyValue = (() => {
+    const raw = process.env.TRUST_PROXY
+    if (!raw) return 1
+    if (raw === "false") return false
+    if (raw === "true") return 1
+    const parsed = Number.parseInt(raw, 10)
+    return Number.isFinite(parsed) ? parsed : raw
+})()
+app.set("trust proxy", trustProxyValue)
+
 // Request logger — prints method, path, status, and duration for every request
 app.use((req, res, next) => {
     const start = Date.now()

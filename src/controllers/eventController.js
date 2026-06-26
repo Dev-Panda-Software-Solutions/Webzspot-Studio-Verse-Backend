@@ -308,7 +308,7 @@ const getDashboardAnalytics = async (req, res) => {
         sixMonthsAgo.setHours(0, 0, 0, 0)
 
         // Fetch raw data for grouping
-        const [allEvents, recentMedia, allClients, allFavs, topEventsRaw, totalMediaCount, storedMedia, scopedEvents] = await Promise.all([
+        const [allEvents, recentMedia, allClients, allFavs, topEventsRaw, totalMediaCount, storedMedia, scopedEvents, tenantMappings, userMappings] = await Promise.all([
             // Events created in last 6 months (for chart)
             prisma.event.findMany({
                 where: { event_id: { in: eventIds }, createdAt: { gte: sixMonthsAgo } },
@@ -356,20 +356,22 @@ const getDashboardAnalytics = async (req, res) => {
                 select: {
                     event_id: true,
                     event_name: true,
-                    tenant_mapping: {
-                        where: { isactive: true },
-                        select: {
-                            tenant_id: true,
-                            tenant: { select: { tenant_id: true, tenant_studio_name: true, tenant_name: true } }
-                        }
-                    },
-                    user_mapping: {
-                        where: { isactive: true },
-                        select: {
-                            user_id: true,
-                            user: { select: { user_id: true, user_name: true, user_email_id: true } }
-                        }
-                    }
+                }
+            }),
+
+            prisma.eventTenantMapping.findMany({
+                where: { event_id: { in: eventIds }, isactive: true },
+                select: {
+                    event_id: true,
+                    tenant_id: true,
+                }
+            }),
+
+            prisma.eventUserMapping.findMany({
+                where: { event_id: { in: eventIds }, isactive: true },
+                select: {
+                    event_id: true,
+                    user_id: true,
                 }
             }),
         ])
@@ -457,12 +459,39 @@ const getDashboardAnalytics = async (req, res) => {
 
         const studioStorage = new Map()
         const clientStorage = new Map()
+        const [mappedTenants, mappedUsers] = await Promise.all([
+            prisma.tenant.findMany({
+                where: { tenant_id: { in: [...new Set(tenantMappings.map(mapping => mapping.tenant_id).filter(Boolean))] } },
+                select: { tenant_id: true, tenant_studio_name: true, tenant_name: true }
+            }),
+            prisma.user.findMany({
+                where: { user_id: { in: [...new Set(userMappings.map(mapping => mapping.user_id).filter(Boolean))] } },
+                select: { user_id: true, user_name: true, user_email_id: true }
+            }),
+        ])
+        const tenantById = new Map(mappedTenants.map(tenant => [tenant.tenant_id, tenant]))
+        const userById = new Map(mappedUsers.map(user => [user.user_id, user]))
+
+        const tenantMappingsByEvent = new Map()
+        for (const mapping of tenantMappings) {
+            const list = tenantMappingsByEvent.get(mapping.event_id) || []
+            list.push(mapping)
+            tenantMappingsByEvent.set(mapping.event_id, list)
+        }
+
+        const userMappingsByEvent = new Map()
+        for (const mapping of userMappings) {
+            const list = userMappingsByEvent.get(mapping.event_id) || []
+            list.push(mapping)
+            userMappingsByEvent.set(mapping.event_id, list)
+        }
+
         for (const event of scopedEvents) {
             const totals = eventStorageMap.get(event.event_id)
             if (!totals) continue
 
-            for (const mapping of event.tenant_mapping || []) {
-                const tenant = mapping.tenant
+            for (const mapping of tenantMappingsByEvent.get(event.event_id) || []) {
+                const tenant = tenantById.get(mapping.tenant_id)
                 if (!tenant) continue
                 const current = studioStorage.get(tenant.tenant_id) || {
                     tenant_id: tenant.tenant_id,
@@ -481,8 +510,8 @@ const getDashboardAnalytics = async (req, res) => {
                 studioStorage.set(tenant.tenant_id, current)
             }
 
-            for (const mapping of event.user_mapping || []) {
-                const user = mapping.user
+            for (const mapping of userMappingsByEvent.get(event.event_id) || []) {
+                const user = userById.get(mapping.user_id)
                 if (!user) continue
                 const current = clientStorage.get(user.user_id) || {
                     user_id: user.user_id,

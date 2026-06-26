@@ -15,7 +15,7 @@ const assignUserToEvent = async (req, res) => {
 
             const [access, existing] = await Promise.all([
                 prisma.eventTenantMapping.findFirst({ where: { event_id, tenant_id: loginRecord?.tenant_id, isactive: true } }),
-                prisma.eventUserMapping.findFirst({ where: { event_id, user_id } }),
+                prisma.eventUserMapping.findFirst({ where: { event_id, user_id }, select: { event_user_id: true, isactive: true } }),
             ])
 
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
@@ -25,25 +25,27 @@ const assignUserToEvent = async (req, res) => {
 
             if (existing) {
                 if (existing.isactive) return errorResponse(res, 'User is already assigned to this event.', 400)
+                const parsedExpiry = parseAccessExpiry(access_expires)
                 const updated = await prisma.eventUserMapping.update({
                     where: { event_user_id: existing.event_user_id },
                     data: {
                         isactive: true,
-                        access_expires: parseAccessExpiry(access_expires),
+                        ...(parsedExpiry != null ? { access_expires: parsedExpiry } : {}),
                         updatedBy: req.user?.id,
                     }
                 })
                 return successResponse(res, updated, 'User Access Restored Successfully.', 200)
             }
         } else {
-            const existing = await prisma.eventUserMapping.findFirst({ where: { event_id, user_id } })
+            const existing = await prisma.eventUserMapping.findFirst({ where: { event_id, user_id }, select: { event_user_id: true, isactive: true } })
             if (existing) {
                 if (existing.isactive) return errorResponse(res, 'User is already assigned to this event.', 400)
+                const parsedExpiry = parseAccessExpiry(access_expires)
                 const updated = await prisma.eventUserMapping.update({
                     where: { event_user_id: existing.event_user_id },
                     data: {
                         isactive: true,
-                        access_expires: parseAccessExpiry(access_expires),
+                        ...(parsedExpiry != null ? { access_expires: parsedExpiry } : {}),
                         updatedBy: req.user?.id,
                     }
                 })
@@ -51,10 +53,11 @@ const assignUserToEvent = async (req, res) => {
             }
         }
 
+        const parsedExpiry = parseAccessExpiry(access_expires)
         const mapping = await prisma.eventUserMapping.create({
             data: {
                 event_id, user_id,
-                access_expires: parseAccessExpiry(access_expires),
+                ...(parsedExpiry != null ? { access_expires: parsedExpiry } : {}),
                 createdBy: req.user?.id || "SYSTEM",
             }
         })
@@ -69,7 +72,7 @@ const updateEventUserMapping = async (req, res) => {
         const { id } = req.params
         const { access_expires, isactive } = req.body
 
-        const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: id } })
+        const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: id }, select: { event_user_id: true, event_id: true } })
         if (!mapping) return errorResponse(res, 'Mapping not found.', 404)
 
         if (req.user.role === "ADMIN") {
@@ -81,7 +84,10 @@ const updateEventUserMapping = async (req, res) => {
         }
 
         const updateData = { updatedBy: req.user?.id }
-        if (access_expires !== undefined) updateData.access_expires = parseAccessExpiry(access_expires)
+        if (access_expires !== undefined) {
+            const parsedExpiry = parseAccessExpiry(access_expires)
+            if (parsedExpiry != null) updateData.access_expires = parsedExpiry
+        }
         if (isactive !== undefined) updateData.isactive = Boolean(isactive)
 
         const updated = await prisma.eventUserMapping.update({
@@ -89,7 +95,6 @@ const updateEventUserMapping = async (req, res) => {
             data: updateData,
             select: {
                 event_user_id: true, isactive: true,
-                access_expires: true,
                 user: { select: { user_id: true, user_name: true, user_email_id: true } }
             }
         })
@@ -117,7 +122,6 @@ const getUsersByEvent = async (req, res) => {
                 event_user_id: true,
                 event_id: true,
                 isactive: true,
-                access_expires: true,
                 createdAt: true,
                 user: { select: { user_id: true, user_name: true, user_email_id: true, user_phone_number: true } }
             },
@@ -145,7 +149,13 @@ const getEventsByUser = async (req, res) => {
 
         const mappings = await prisma.eventUserMapping.findMany({
             where: { user_id, isactive: true },
-            include: { event: true }
+            select: {
+                event_user_id: true,
+                event_id: true,
+                isactive: true,
+                createdAt: true,
+                event: true,
+            }
         })
         return successResponse(res, mappings)
     } catch (err) {
@@ -155,7 +165,7 @@ const getEventsByUser = async (req, res) => {
 
 const removeUserFromEvent = async (req, res) => {
     try {
-        const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: req.params.id } })
+        const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: req.params.id }, select: { event_user_id: true, event_id: true } })
         if (!mapping) return errorResponse(res, 'User-Event mapping not found.', 404)
 
         if (req.user.role === "ADMIN") {

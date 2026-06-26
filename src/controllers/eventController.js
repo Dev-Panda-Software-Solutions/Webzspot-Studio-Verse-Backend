@@ -3,7 +3,6 @@ const fs = require("fs")
 const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { activeUserEventAccessWhere } = require("../utils/eventAccess")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
 
@@ -102,18 +101,31 @@ const getAllEvents = async (req, res) => {
             user_id: loginRecord?.user_id,
             isactive: true,
             event: { isactive: true },
-            OR: [{ access_expires: null }, { access_expires: { gte: now } }]
         }
+        // Explicit select intentionally excludes access_expires — that column may not exist yet
+        // in the DB if the migration hasn't run. All events default to has_current_access: true.
+        // Once the migration runs and the column exists, add access_expires: true here.
         const [mappings, total] = await Promise.all([
-            prisma.eventUserMapping.findMany({ where, include: { event: true }, skip, take: limit, orderBy: { createdAt: 'desc' } }),
+            prisma.eventUserMapping.findMany({
+                where,
+                select: {
+                    event_user_id: true,
+                    event_id: true,
+                    user_id: true,
+                    isactive: true,
+                    createdAt: true,
+                    event: true,
+                },
+                skip, take: limit, orderBy: { createdAt: 'desc' }
+            }),
             prisma.eventUserMapping.count({ where })
         ])
-        // Attach per-event access info (expiry, start) to each event object
         const items = mappings.map(m => ({
             ...m.event,
             _access: {
                 event_user_id: m.event_user_id,
-                access_expires: m.access_expires,
+                access_expires: null,
+                has_current_access: true,
             }
         }))
         return successResponse(res, { items, total, page, limit, pages: Math.ceil(total / limit) })
@@ -137,8 +149,10 @@ const getEventById = async (req, res) => {
 
         if (role === "USER") {
             const loginRecord = await prisma.login.findUnique({ where: { transid: loginId } })
+            // Use explicit select to avoid selecting access_expires if the column hasn't been migrated yet
             const access = await prisma.eventUserMapping.findFirst({
-                where: activeUserEventAccessWhere({ event_id, user_id: loginRecord?.user_id })
+                where: { event_id, user_id: loginRecord?.user_id, isactive: true },
+                select: { event_user_id: true }
             })
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
         }

@@ -308,7 +308,7 @@ const getDashboardAnalytics = async (req, res) => {
         sixMonthsAgo.setHours(0, 0, 0, 0)
 
         // Fetch raw data for grouping
-        const [allEvents, recentMedia, allClients, allFavs, topEventsRaw, totalMediaCount] = await Promise.all([
+        const [allEvents, recentMedia, allClients, allFavs, topEventsRaw, totalMediaCount, storedMedia, scopedEvents] = await Promise.all([
             // Events created in last 6 months (for chart)
             prisma.event.findMany({
                 where: { event_id: { in: eventIds }, createdAt: { gte: sixMonthsAgo } },
@@ -338,6 +338,40 @@ const getDashboardAnalytics = async (req, res) => {
 
             // Total media count (all time)
             prisma.uploadedMedia.count({ where: { event_id: { in: eventIds }, isactive: true } }),
+
+            // Storage size source (all time)
+            prisma.uploadedMedia.findMany({
+                where: { event_id: { in: eventIds }, isactive: true },
+                select: {
+                    event_id: true,
+                    media_size: true,
+                    original_size: true,
+                    media_server_path: true,
+                    compressed_server_path: true
+                }
+            }),
+
+            prisma.event.findMany({
+                where: { event_id: { in: eventIds } },
+                select: {
+                    event_id: true,
+                    event_name: true,
+                    tenant_mapping: {
+                        where: { isactive: true },
+                        select: {
+                            tenant_id: true,
+                            tenant: { select: { tenant_id: true, tenant_studio_name: true, tenant_name: true } }
+                        }
+                    },
+                    user_mapping: {
+                        where: { isactive: true },
+                        select: {
+                            user_id: true,
+                            user: { select: { user_id: true, user_name: true, user_email_id: true } }
+                        }
+                    }
+                }
+            }),
         ])
 
         const allMedia = recentMedia
@@ -385,6 +419,97 @@ const getDashboardAnalytics = async (req, res) => {
             media_count: t._count.media_id,
         }))
 
+        const parseSizeToKb = (value) => {
+            if (!value) return 0
+            const text = String(value).trim()
+            const match = text.match(/^([\d.]+)\s*([a-zA-Z]*)/)
+            const amount = Number.parseFloat(match?.[1])
+            if (!Number.isFinite(amount)) return 0
+            const unit = (match?.[2] || 'kb').toLowerCase()
+            if (unit.startsWith('gb')) return amount * 1024 * 1024
+            if (unit.startsWith('mb')) return amount * 1024
+            if (unit.startsWith('b') && !unit.startsWith('kb')) return amount / 1024
+            return amount
+        }
+
+        const eventStorageMap = new Map()
+        for (const media of storedMedia) {
+            const originalKb = parseSizeToKb(media.original_size || media.media_size)
+            const compressedKb = parseSizeToKb(media.media_size)
+            const storesSeparateCompressed = media.compressed_server_path && media.compressed_server_path !== media.media_server_path
+            const storedKb = originalKb + (storesSeparateCompressed ? compressedKb : 0)
+            const current = eventStorageMap.get(media.event_id) || { original_kb: 0, compressed_kb: 0, stored_kb: 0, media_count: 0 }
+            current.original_kb += originalKb
+            current.compressed_kb += storesSeparateCompressed ? compressedKb : 0
+            current.stored_kb += storedKb
+            current.media_count += 1
+            eventStorageMap.set(media.event_id, current)
+        }
+
+        const eventDetailsMap = new Map(scopedEvents.map(e => [e.event_id, e]))
+        const storage_by_event = eventIds
+            .map(event_id => {
+                const event = eventDetailsMap.get(event_id)
+                const totals = eventStorageMap.get(event_id) || { original_kb: 0, compressed_kb: 0, stored_kb: 0, media_count: 0 }
+                return { event_id, event_name: event?.event_name || 'Unknown', ...totals }
+            })
+            .sort((a, b) => b.stored_kb - a.stored_kb)
+
+        const studioStorage = new Map()
+        const clientStorage = new Map()
+        for (const event of scopedEvents) {
+            const totals = eventStorageMap.get(event.event_id)
+            if (!totals) continue
+
+            for (const mapping of event.tenant_mapping || []) {
+                const tenant = mapping.tenant
+                if (!tenant) continue
+                const current = studioStorage.get(tenant.tenant_id) || {
+                    tenant_id: tenant.tenant_id,
+                    studio_name: tenant.tenant_studio_name || tenant.tenant_name || 'Studio',
+                    stored_kb: 0,
+                    original_kb: 0,
+                    compressed_kb: 0,
+                    event_count: 0,
+                    media_count: 0,
+                }
+                current.stored_kb += totals.stored_kb
+                current.original_kb += totals.original_kb
+                current.compressed_kb += totals.compressed_kb
+                current.event_count += 1
+                current.media_count += totals.media_count
+                studioStorage.set(tenant.tenant_id, current)
+            }
+
+            for (const mapping of event.user_mapping || []) {
+                const user = mapping.user
+                if (!user) continue
+                const current = clientStorage.get(user.user_id) || {
+                    user_id: user.user_id,
+                    user_name: user.user_name || user.user_email_id || 'Client',
+                    user_email_id: user.user_email_id,
+                    assigned_storage_kb: 0,
+                    event_count: 0,
+                    media_count: 0,
+                }
+                current.assigned_storage_kb += totals.stored_kb
+                current.event_count += 1
+                current.media_count += totals.media_count
+                clientStorage.set(user.user_id, current)
+            }
+        }
+
+        const storage_summary = {
+            total_original_kb: storedMedia.reduce((sum, media) => sum + parseSizeToKb(media.original_size || media.media_size), 0),
+            total_compressed_kb: storedMedia.reduce((sum, media) => {
+                return sum + (media.compressed_server_path && media.compressed_server_path !== media.media_server_path ? parseSizeToKb(media.media_size) : 0)
+            }, 0),
+            total_stored_kb: storage_by_event.reduce((sum, event) => sum + event.stored_kb, 0),
+            by_event: storage_by_event.slice(0, 10),
+            by_studio: Array.from(studioStorage.values()).sort((a, b) => b.stored_kb - a.stored_kb).slice(0, 10),
+            by_client: Array.from(clientStorage.values()).sort((a, b) => b.assigned_storage_kb - a.assigned_storage_kb).slice(0, 10),
+        }
+
         // Event status breakdown (active vs archived — all time)
         const [activeCount, archivedCount] = await Promise.all([
             prisma.event.count({ where: { event_id: { in: eventIds }, isactive: true } }),
@@ -423,6 +548,7 @@ const getDashboardAnalytics = async (req, res) => {
             event_status: { active: activeCount, archived: archivedCount },
             studio_growth,
             user_growth,
+            storage_summary,
         })
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))

@@ -5,8 +5,14 @@ const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 const { addToBlocklist } = require("../utils/tokenBlocklist")
 
-const MAX_FAILED_ATTEMPTS = 5
-const LOCK_DURATION_MS = 5 * 60 * 1000
+const envInt = (key, fallback) => {
+    const value = Number.parseInt(process.env[key], 10)
+    return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+const MAX_FAILED_ATTEMPTS = envInt("ACCOUNT_LOCK_MAX_FAILED_ATTEMPTS", 5)
+const LOCK_DURATION_MINUTES = envInt("ACCOUNT_LOCK_DURATION_MINUTES", 5)
+const LOCK_DURATION_MS = LOCK_DURATION_MINUTES * 60 * 1000
 
 const login = async (req, res) => {
     try {
@@ -59,7 +65,7 @@ const login = async (req, res) => {
                 where: { transid: loginRecord.transid },
                 data: { failed_login_attempts: newFailCount, locked_until: shouldLock ? new Date(Date.now() + LOCK_DURATION_MS) : null }
             })
-            if (shouldLock) return errorResponse(res, `Too many failed attempts. Account locked for 5 minutes.`, 423)
+            if (shouldLock) return errorResponse(res, `Too many failed attempts. Account locked for ${LOCK_DURATION_MINUTES} minute${LOCK_DURATION_MINUTES === 1 ? "" : "s"}.`, 423)
             return errorResponse(res, `Invalid username or password. ${MAX_FAILED_ATTEMPTS - newFailCount} attempt(s) remaining before lockout.`, 401)
         }
 

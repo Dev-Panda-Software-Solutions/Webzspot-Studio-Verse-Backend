@@ -2,6 +2,7 @@ const path = require("path")
 const fs = require("fs")
 const sharp = require("sharp")
 const prisma = require("../utils/prismaClient")
+const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 
 const SAFE_MEDIA_SELECT = {
@@ -35,6 +36,11 @@ const uploadMedia = async (req, res) => {
         }
 
         const file = req.file
+        if (!s3Storage.isConfigured()) {
+            fs.unlink(file.path, () => {})
+            return errorResponse(res, 'Private media storage is not configured. Set AWS_S3_BUCKET, AWS_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY.', 500)
+        }
+
         const uploadStartTime = new Date()
 
         // 1 — Register stage: file has landed on disk
@@ -76,6 +82,27 @@ const uploadMedia = async (req, res) => {
         const finalSize = `${(fileStats.size / 1024).toFixed(2)} KB`
 
         const originalSizeKb = `${(file.size / 1024).toFixed(2)} KB`
+        let mediaServerPath = originalPath
+        let compressedServerPath = compressedPath
+
+        const originalKey = `events/${event_id}/original/${path.basename(originalPath)}`
+        const compressedKey = isImage
+            ? `events/${event_id}/compressed/${path.basename(compressedPath)}`
+            : originalKey
+
+        mediaServerPath = await s3Storage.uploadFile({
+            localPath: originalPath,
+            key: originalKey,
+            contentType: file.mimetype
+        })
+
+        compressedServerPath = isImage
+            ? await s3Storage.uploadFile({
+                localPath: compressedPath,
+                key: compressedKey,
+                contentType: "image/jpeg"
+            })
+            : mediaServerPath
 
         // 3 — Create UploadedMedia linked to stage
         const media = await prisma.uploadedMedia.create({
@@ -86,8 +113,8 @@ const uploadMedia = async (req, res) => {
                 media_type: file.mimetype,
                 media_size: finalSize,
                 original_size: originalSizeKb,
-                media_server_path: originalPath,
-                compressed_server_path: compressedPath,
+                media_server_path: mediaServerPath,
+                compressed_server_path: compressedServerPath,
                 createdBy: req.user?.id || "SYSTEM"
             },
             select: SAFE_MEDIA_SELECT
@@ -103,13 +130,16 @@ const uploadMedia = async (req, res) => {
                 media_compressed_time: isImage ? compressedTime : null,
                 media_original_uploaded: "1",
                 media_original_uploaded_time: new Date(),
-                media_original_server_path: originalPath,
+                media_original_server_path: mediaServerPath,
                 media_compressed_uploaded: isImage ? "1" : "0",
                 media_compressed_uploaded_time: isImage ? new Date() : null,
-                media_compressed_server_path: isImage ? compressedPath : "N/A - Original Used",
+                media_compressed_server_path: isImage ? compressedServerPath : mediaServerPath,
                 updatedBy: req.user?.id || "SYSTEM"
             }
         })
+
+        fs.unlink(originalPath, () => {})
+        if (isImage && compressedPath !== originalPath) fs.unlink(compressedPath, () => {})
 
         return successResponse(res, media, 'Media Uploaded Successfully.', 201)
     } catch (err) {
@@ -222,10 +252,14 @@ const hardDeleteMedia = async (req, res) => {
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
         }
 
-        if (media.compressed_server_path && media.compressed_server_path !== media.media_server_path && fs.existsSync(media.compressed_server_path)) {
+        if (s3Storage.isS3Path(media.compressed_server_path) && media.compressed_server_path !== media.media_server_path) {
+            await s3Storage.deleteObject(media.compressed_server_path)
+        } else if (media.compressed_server_path && media.compressed_server_path !== media.media_server_path && fs.existsSync(media.compressed_server_path)) {
             fs.unlinkSync(media.compressed_server_path)
         }
-        if (media.media_server_path && fs.existsSync(media.media_server_path)) {
+        if (s3Storage.isS3Path(media.media_server_path)) {
+            await s3Storage.deleteObject(media.media_server_path)
+        } else if (media.media_server_path && fs.existsSync(media.media_server_path)) {
             fs.unlinkSync(media.media_server_path)
         }
 

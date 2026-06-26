@@ -3,6 +3,7 @@ const fs = require("fs")
 const jwt = require("jsonwebtoken")
 const archiver = require("archiver")
 const prisma = require("../utils/prismaClient")
+const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
@@ -33,6 +34,41 @@ const MIME_BY_EXT = {
     ".mkv": "video/x-matroska",
     ".mp3": "audio/mpeg",
     ".wav": "audio/wav"
+}
+
+const getContentType = (filePath, fallback) => {
+    const ext = path.extname(filePath || "").toLowerCase()
+    return MIME_BY_EXT[ext] || fallback || "application/octet-stream"
+}
+
+const getMediaFileMeta = async (filePath, fallbackType) => {
+    if (s3Storage.isS3Path(filePath)) {
+        const head = await s3Storage.headObject(filePath)
+        if (!head) return null
+        return {
+            contentType: head.ContentType || getContentType(filePath, fallbackType),
+            fileSize: head.ContentLength || 0
+        }
+    }
+
+    const safe = safePath(filePath)
+    if (!safe || !fs.existsSync(safe)) return null
+    return {
+        localPath: safe,
+        contentType: getContentType(safe, fallbackType),
+        fileSize: fs.statSync(safe).size
+    }
+}
+
+const appendArchiveFile = async (archive, filePath, name) => {
+    if (s3Storage.isS3Path(filePath)) {
+        const stream = await s3Storage.getObjectStream(filePath)
+        if (stream) archive.append(stream, { name })
+        return
+    }
+
+    const safe = safePath(filePath)
+    if (safe && fs.existsSync(safe)) archive.file(safe, { name })
 }
 
 const getMediaToken = async (req, res) => {
@@ -115,14 +151,12 @@ const serveMedia = async (req, res) => {
         const media = await prisma.uploadedMedia.findUnique({ where: { media_id: decoded.media_id } })
         if (!media || !media.isactive) return res.status(404).json({ success: false, message: "Media not found." })
 
-        const filePath = safePath(media.compressed_server_path)
-        if (!filePath) return res.status(403).json({ success: false, message: "Access denied." })
-        if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, message: "File not found on server." })
+        const filePath = media.compressed_server_path || media.media_server_path
+        const fileMeta = await getMediaFileMeta(filePath, media.media_type)
+        if (!fileMeta) return res.status(404).json({ success: false, message: "File not found." })
 
-        const ext = path.extname(filePath).toLowerCase()
-        const contentType = MIME_BY_EXT[ext] || "application/octet-stream"
-        const stat = fs.statSync(filePath)
-        const fileSize = stat.size
+        const contentType = fileMeta.contentType
+        const fileSize = fileMeta.fileSize
         const rangeHeader = req.headers.range
         const acceptHeader = req.headers.accept || ""
         const isVideo = contentType.startsWith("video/")
@@ -266,10 +300,22 @@ img.src='${safeStream}?raw=1';
             res.status(206)
             res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`)
             res.setHeader("Content-Length", chunkSize)
-            fs.createReadStream(filePath, { start, end }).pipe(res)
+            if (s3Storage.isS3Path(filePath)) {
+                const stream = await s3Storage.getObjectStream(filePath, `bytes=${start}-${end}`)
+                if (!stream) return res.status(404).json({ success: false, message: "File not found." })
+                stream.pipe(res)
+            } else {
+                fs.createReadStream(fileMeta.localPath, { start, end }).pipe(res)
+            }
         } else {
             res.setHeader("Content-Length", fileSize)
-            fs.createReadStream(filePath).pipe(res)
+            if (s3Storage.isS3Path(filePath)) {
+                const stream = await s3Storage.getObjectStream(filePath)
+                if (!stream) return res.status(404).json({ success: false, message: "File not found." })
+                stream.pipe(res)
+            } else {
+                fs.createReadStream(fileMeta.localPath).pipe(res)
+            }
         }
     } catch (err) {
         return res.status(500).json({ success: false, message: "An error occurred while serving the file." })
@@ -314,10 +360,7 @@ const downloadUserFavouritesAsZip = async (req, res) => {
         archive.pipe(res)
 
         for (const fav of favourites) {
-            const filePath = safePath(fav.media.media_server_path)
-            if (filePath && fs.existsSync(filePath)) {
-                archive.file(filePath, { name: path.basename(fav.media.media_name) })
-            }
+            await appendArchiveFile(archive, fav.media.media_server_path, path.basename(fav.media.media_name))
         }
 
         await archive.finalize()
@@ -355,10 +398,7 @@ const downloadTenantFavouritesAsZip = async (req, res) => {
         archive.pipe(res)
 
         for (const fav of favourites) {
-            const filePath = safePath(fav.media.media_server_path)
-            if (filePath && fs.existsSync(filePath)) {
-                archive.file(filePath, { name: path.basename(fav.media.media_name) })
-            }
+            await appendArchiveFile(archive, fav.media.media_server_path, path.basename(fav.media.media_name))
         }
 
         await archive.finalize()

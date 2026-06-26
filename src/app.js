@@ -92,8 +92,15 @@ app.use("/api/favourites", favouriteRoutes)
 app.use("/api/tenant-favourites", tenantFavouriteRoutes)
 app.use("/api/tenant-settings", tenantSettingsRoutes)
 app.use("/api/upload", uploadRoutes)
-// NOTE: /uploads is NOT served statically — all media is served through the
-// authenticated /api/media token flow to prevent unauthenticated file access.
+// Branding/cover/profile assets — safe to serve publicly (not sensitive client media).
+// All event media files require authentication via /api/media token flow.
+const staticOpts = {
+    maxAge: "1d",
+    setHeaders: (res) => { res.setHeader("Cross-Origin-Resource-Policy", "cross-origin") }
+}
+app.use("/uploads/watermarks", express.static(path.join(__dirname, "../uploads/watermarks"), staticOpts))
+app.use("/uploads/covers",     express.static(path.join(__dirname, "../uploads/covers"),     staticOpts))
+app.use("/uploads/profiles",   express.static(path.join(__dirname, "../uploads/profiles"),   staticOpts))
 
 app.get("/", (req, res) => {
     res.json({ message: "Studio-Verse API is Alive." })

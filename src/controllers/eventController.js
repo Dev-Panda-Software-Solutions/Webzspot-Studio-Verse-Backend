@@ -1,6 +1,7 @@
 const path = require("path")
 const fs = require("fs")
 const prisma = require("../utils/prismaClient")
+const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
@@ -233,6 +234,10 @@ const hardDeleteEvent = async (req, res) => {
         for (const m of mediaFiles) {
             for (const filePath of [m.media_server_path, m.compressed_server_path]) {
                 if (!filePath) continue
+                if (s3Storage.isS3Path(filePath)) {
+                    s3Storage.deleteObject(filePath).catch(err => console.error('[Event delete] S3 delete error:', err.message))
+                    continue
+                }
                 const resolved = path.resolve(filePath)
                 if (resolved.startsWith(UPLOADS_DIR)) {
                     fs.unlink(resolved, err => { if (err && err.code !== 'ENOENT') console.error('[Event delete] unlink error:', err.message) })

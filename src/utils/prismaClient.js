@@ -1,5 +1,6 @@
 const { PrismaClient } = require('@prisma/client')
 const { PrismaPg } = require('@prisma/adapter-pg')
+const logger = require('./logger')
 
 // Append TCP keepalive params so NAT/firewall never drops the idle connection.
 // keepalives_idle=30 → send first probe after 30s idle
@@ -12,15 +13,30 @@ const connectionString = `${base}${sep}keepalives=1&keepalives_idle=30&keepalive
 const adapter = new PrismaPg({ connectionString })
 const prisma = new PrismaClient({
     adapter,
-    log: [{ emit: 'event', level: 'query' }],
+    log: [
+        { emit: 'event', level: 'query' },
+        { emit: 'event', level: 'error' },
+        { emit: 'event', level: 'warn' }
+    ],
 })
 
 // Log every DB query with elapsed time — red >500ms, yellow >100ms, grey otherwise
 prisma.$on('query', (e) => {
     const ms = e.duration
-    const color = ms > 500 ? '\x1b[31m' : ms > 100 ? '\x1b[33m' : '\x1b[90m'
+    const colorName = ms > 500 ? 'red' : ms > 100 ? 'yellow' : 'gray'
     const preview = e.query.replace(/\s+/g, ' ').slice(0, 80)
-    console.log(`  ${color}[DB ${ms}ms]\x1b[0m ${preview}`)
+    console.log(`  ${logger.color(colorName, `[DB ${ms}ms]`)} ${preview}`)
+    if (process.env.LOG_LEVEL === 'debug') {
+        logger.debug('DB', 'Query details', { query: e.query, params: e.params, duration_ms: ms })
+    }
+})
+
+prisma.$on('error', (e) => {
+    logger.error('DB', e.message, e)
+})
+
+prisma.$on('warn', (e) => {
+    logger.warn('DB', e.message, e)
 })
 
 module.exports = prisma

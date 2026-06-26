@@ -3,6 +3,8 @@ const path = require("path")
 const cors = require("cors")
 const dotenv = require("dotenv")
 const helmet = require("helmet")
+const logger = require("./utils/logger")
+const requestLogger = require("./middleware/requestLogger")
 
 dotenv.config({ debug: true })
 
@@ -10,13 +12,13 @@ dotenv.config({ debug: true })
 const requiredEnvs = ["JWT_SECRET", "DATABASE_URL", "JWT_EXPIRES_IN"]
 requiredEnvs.forEach(key => {
     if (!process.env[key]) {
-        console.error(`FATAL: Missing required environment variable: ${key}`)
+        logger.error("BOOT", `FATAL: Missing required environment variable: ${key}`)
         process.exit(1)
     }
 })
 
 if (process.env.AUTH_ENABLED === "false") {
-    console.warn("WARNING: AUTH_ENABLED is false — all authentication is disabled. Do NOT use in production.")
+    logger.warn("BOOT", "WARNING: AUTH_ENABLED is false. All authentication is disabled. Do NOT use in production.")
 }
 
 const authRoutes = require("./routes/authRoutes")
@@ -47,20 +49,7 @@ const trustProxyValue = (() => {
     return Number.isFinite(parsed) ? parsed : raw
 })()
 app.set("trust proxy", trustProxyValue)
-
-// Request logger — prints method, path, status, and duration for every request
-app.use((req, res, next) => {
-    const start = Date.now()
-    res.on('finish', () => {
-        const ms = Date.now() - start
-        const color = res.statusCode >= 500 ? '\x1b[31m'
-            : res.statusCode >= 400 ? '\x1b[33m'
-            : res.statusCode >= 300 ? '\x1b[36m'
-            : '\x1b[32m'
-        console.log(`${color}${req.method}\x1b[0m ${req.path} → ${res.statusCode} (${ms}ms)`)
-    })
-    next()
-})
+app.use(requestLogger)
 
 app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -118,13 +107,25 @@ app.get("/", (req, res) => {
 
 // Global error handler — catches multer rejections, unhandled throws, and anything else
 app.use((err, req, res, next) => {
+    logger.error("EXPRESS", "Unhandled middleware error", {
+        request_id: req.requestId,
+        method: req.method,
+        url: req.originalUrl,
+        ip: req.ip,
+        user: req.user,
+        error: {
+            name: err.name,
+            message: err.message,
+            code: err.code,
+            stack: err.stack
+        }
+    })
     if (err.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({ success: false, message: "File too large. Maximum allowed is 500MB for media and 5MB for profile images.", data: null })
     }
     if (err.message && (err.message.includes("File type not allowed") || err.message.includes("Only image files"))) {
         return res.status(415).json({ success: false, message: err.message, data: null })
     }
-    console.error("Unhandled error:", err)
     return res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again.", data: null })
 })
 
@@ -132,22 +133,34 @@ const PORT = process.env.PORT || 5000
 const prisma = require("./utils/prismaClient")
 
 app.listen(PORT, async () => {
-    console.log(`Server is running on port ${PORT}...`)
+    logger.success("BOOT", `Server is running on port ${PORT}`, {
+        node_env: process.env.NODE_ENV || "development",
+        trust_proxy: trustProxyValue,
+        frontend_url: process.env.FRONTEND_URL || "http://localhost:3000"
+    })
     try {
         const t = Date.now()
         await prisma.$connect()
-        console.log(`\x1b[32m[DB] Connection pool ready (${Date.now() - t}ms)\x1b[0m`)
+        logger.success("DB", `Connection pool ready (${Date.now() - t}ms)`)
     } catch (err) {
-        console.error('\x1b[31m[DB] Connection failed at startup:\x1b[0m', err.message)
+        logger.error("DB", "Connection failed at startup", err)
     }
 
     // Keepalive ping every 45s — prevents NAT/firewall from dropping idle DB connections
     setInterval(async () => {
-        try { await prisma.$queryRaw`SELECT 1` } catch {}
+        try { await prisma.$queryRaw`SELECT 1` } catch (err) { logger.warn("DB", "Keepalive ping failed", { message: err.message }) }
     }, 45_000)
 
     // Prune expired JWT blocklist entries every 30 minutes
     setInterval(pruneExpired, 30 * 60 * 1000)
+})
+
+process.on("unhandledRejection", (reason) => {
+    logger.error("PROCESS", "Unhandled promise rejection", reason instanceof Error ? reason : { reason })
+})
+
+process.on("uncaughtException", (err) => {
+    logger.error("PROCESS", "Uncaught exception", err)
 })
 
 module.exports = app

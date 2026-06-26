@@ -1,4 +1,7 @@
+const logger = require("./logger")
+
 const sanitizePrismaError = (err) => {
+    logger.error("APP", "Controller error sanitized for client", err instanceof Error ? err : { error: err })
     if (!err?.code) return "An unexpected error occurred. Please try again."
     switch (err.code) {
         case "P2002": return "A record with this value already exists. Please use a different value."

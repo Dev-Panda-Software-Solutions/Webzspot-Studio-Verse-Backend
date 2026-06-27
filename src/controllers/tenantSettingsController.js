@@ -39,6 +39,12 @@ const getTenantSettings = async (req, res) => {
 
         const settings = await prisma.tenantSettings.findUnique({ where: { tenant_id: req.params.tenant_id } })
         if (!settings) return errorResponse(res, 'Tenant Settings Not Found.', 404)
+
+        // USER role: only expose watermark path — not internal config fields
+        if (req.user.role === "USER") {
+            return successResponse(res, { tenant_watermark_path: settings.tenant_watermark_path })
+        }
+
         return successResponse(res, settings)
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))

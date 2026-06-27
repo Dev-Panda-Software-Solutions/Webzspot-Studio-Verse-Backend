@@ -168,7 +168,11 @@ const getEventById = async (req, res) => {
                         collaboration_role: true,
                         tenant: { select: { tenant_id: true, tenant_name: true, tenant_studio_name: true } }
                     }
-                } : false,
+                } : {
+                    // USER role: only expose owner tenant_id so frontend can fetch the studio watermark
+                    where: { isactive: true, collaboration_role: 'OWNER' },
+                    select: { tenant_id: true }
+                },
                 user_mapping: role !== "USER" ? {
                     where: { isactive: true },
                     select: {

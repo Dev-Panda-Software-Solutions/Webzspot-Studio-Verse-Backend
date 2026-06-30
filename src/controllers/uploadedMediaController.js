@@ -3,6 +3,7 @@ const fs = require("fs")
 const sharp = require("sharp")
 const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
+const { withMediaUrls, withMediaUrl } = require("../utils/mediaUrl")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 
 const MAX_LARGE_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
@@ -347,8 +348,12 @@ const getAllMediaByEvent = async (req, res) => {
         }
 
         const where = { event_id, isactive: true }
-        const [items, total, allSizes] = await Promise.all([
-            prisma.uploadedMedia.findMany({ where, select: SAFE_MEDIA_SELECT, skip, take: limit, orderBy: { createdAt: 'desc' } }),
+        const [rawItems, total, allSizes] = await Promise.all([
+            prisma.uploadedMedia.findMany({
+                where,
+                select: { ...SAFE_MEDIA_SELECT, compressed_server_path: true },
+                skip, take: limit, orderBy: { createdAt: 'desc' }
+            }),
             prisma.uploadedMedia.count({ where }),
             role !== 'USER'
                 ? prisma.uploadedMedia.findMany({ where, select: { media_size: true, original_size: true } })
@@ -357,6 +362,9 @@ const getAllMediaByEvent = async (req, res) => {
 
         const total_media_kb = allSizes.reduce((s, m) => s + (parseFloat(m.media_size) || 0), 0)
         const total_original_kb = allSizes.reduce((s, m) => s + (parseFloat(m.original_size) || 0), 0)
+
+        // Pre-signed S3 URLs generated fresh on every request — media never streams through this server.
+        const items = await withMediaUrls(rawItems)
 
         return successResponse(res, { items, total, page, limit, pages: Math.ceil(total / limit), total_media_kb, total_original_kb })
     } catch (err) {
@@ -368,7 +376,7 @@ const getMediaById = async (req, res) => {
     try {
         const media = await prisma.uploadedMedia.findUnique({
             where: { media_id: req.params.id },
-            select: SAFE_MEDIA_SELECT
+            select: { ...SAFE_MEDIA_SELECT, compressed_server_path: true }
         })
         if (!media) return errorResponse(res, 'Media Not Found.', 404)
 
@@ -391,7 +399,7 @@ const getMediaById = async (req, res) => {
             if (!access) return errorResponse(res, 'You do not have access to this media.', 403)
         }
 
-        return successResponse(res, media)
+        return successResponse(res, await withMediaUrl(media))
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }

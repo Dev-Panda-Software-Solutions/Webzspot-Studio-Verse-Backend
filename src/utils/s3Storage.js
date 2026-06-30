@@ -10,6 +10,7 @@ const {
     CompleteMultipartUploadCommand,
     AbortMultipartUploadCommand
 } = require("@aws-sdk/client-s3")
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner")
 
 const bucket = process.env.AWS_S3_BUCKET || process.env.S3_BUCKET
 const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "ap-south-1"
@@ -82,6 +83,16 @@ const getObjectStream = async (s3Path, range) => {
     return result.Body
 }
 
+// Generates a temporary, directly-fetchable S3 URL — the bucket stays private and
+// nothing is ever streamed back through this server.
+const getPresignedUrl = async (s3Path, expiresIn = 30) => {
+    const key = getKeyFromS3Path(s3Path)
+    if (!key || !isConfigured()) return null
+
+    const command = new GetObjectCommand({ Bucket: bucket, Key: key })
+    return getSignedUrl(client, command, { expiresIn })
+}
+
 const deleteObject = async (s3Path) => {
     const key = getKeyFromS3Path(s3Path)
     if (!key || !isConfigured()) return
@@ -151,6 +162,7 @@ module.exports = {
     uploadFile,
     headObject,
     getObjectStream,
+    getPresignedUrl,
     deleteObject,
     createMultipartUpload,
     uploadPart,

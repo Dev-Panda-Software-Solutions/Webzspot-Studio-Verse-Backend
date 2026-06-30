@@ -1,4 +1,5 @@
 const prisma = require("../utils/prismaClient")
+const { withMediaUrl } = require("../utils/mediaUrl")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 
 const addFavourite = async (req, res) => {
@@ -67,11 +68,15 @@ const getFavouritesByUser = async (req, res) => {
         const favourites = await prisma.userFavouriteMediaMapping.findMany({
             where,
             include: {
-                media: { select: { media_id: true, media_name: true, media_type: true, media_size: true, original_size: true } },
+                media: { select: { media_id: true, media_name: true, media_type: true, media_size: true, original_size: true, compressed_server_path: true } },
                 event: { select: { event_id: true, event_name: true } }
             }
         })
-        return successResponse(res, favourites)
+
+        const favouritesWithUrls = await Promise.all(
+            favourites.map(async (f) => ({ ...f, media: await withMediaUrl(f.media) }))
+        )
+        return successResponse(res, favouritesWithUrls)
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -95,7 +100,7 @@ const getEventFavouritesGroupedByUser = async (req, res) => {
             where: { event_id, isactive: true },
             include: {
                 user: { select: { user_id: true, user_name: true, user_email_id: true } },
-                media: { select: { media_id: true, media_name: true, media_type: true, media_size: true, original_size: true } }
+                media: { select: { media_id: true, media_name: true, media_type: true, media_size: true, original_size: true, compressed_server_path: true } }
             }
         })
 
@@ -103,7 +108,8 @@ const getEventFavouritesGroupedByUser = async (req, res) => {
         for (const fav of favourites) {
             const uid = fav.user.user_id
             if (!grouped[uid]) grouped[uid] = { user: fav.user, favourites: [] }
-            grouped[uid].favourites.push({ ...fav.media, favourite_id: fav.user_favourite_media_id })
+            const media = await withMediaUrl(fav.media)
+            grouped[uid].favourites.push({ ...media, favourite_id: fav.user_favourite_media_id })
         }
 
         return successResponse(res, Object.values(grouped))

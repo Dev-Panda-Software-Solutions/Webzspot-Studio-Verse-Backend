@@ -1,4 +1,5 @@
 const prisma = require("../utils/prismaClient")
+const { withMediaUrl } = require("../utils/mediaUrl")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 
 const addTenantFavourite = async (req, res) => {
@@ -68,10 +69,14 @@ const getTenantFavouritesForEvent = async (req, res) => {
             select: {
                 tenant_favourite_id: true,
                 media_id: true,
-                media: { select: { media_id: true, media_name: true, media_type: true, media_size: true } }
+                media: { select: { media_id: true, media_name: true, media_type: true, media_size: true, compressed_server_path: true } }
             }
         })
-        return successResponse(res, favourites)
+
+        const favouritesWithUrls = await Promise.all(
+            favourites.map(async (f) => ({ ...f, media: await withMediaUrl(f.media) }))
+        )
+        return successResponse(res, favouritesWithUrls)
     } catch (err) {
         console.error("[TenantFavourites] Failed:", err)
         return errorResponse(res, sanitizePrismaError(err))

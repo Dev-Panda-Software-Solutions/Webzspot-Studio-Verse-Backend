@@ -35,7 +35,6 @@ model SuperAdmin {
   updatedAt                DateTime @updatedAt
 
   login Login?
-
 }
 
 // ============================================
@@ -56,12 +55,14 @@ model Tenant {
   updatedBy             String?
   updatedAt             DateTime @updatedAt
 
-  login           Login?
-  event_mapping      EventTenantMapping[]
-  tenant_settings    TenantSettings?
-  created_users      User[]
-  tenant_favourites  TenantFavouriteMediaMapping[]
-
+  login                Login?
+  event_mapping        EventTenantMapping[]
+  tenant_settings      TenantSettings?
+  created_users        User[]
+  tenant_favourites    TenantFavouriteMediaMapping[]
+  tenant_subscriptions TenantSubscription[]
+  tenant_wallet        TenantWallet?
+  wallet_transactions  WalletTransaction[]
 }
 
 // ============================================
@@ -86,7 +87,7 @@ model User {
   login           Login?
   event_mapping   EventUserMapping[]
   favourite_media UserFavouriteMediaMapping[]
-  created_by      Tenant?  @relation(fields: [created_by_tenant_id], references: [tenant_id])
+  created_by      Tenant?                     @relation(fields: [created_by_tenant_id], references: [tenant_id])
 
   @@index([created_by_tenant_id])
 }
@@ -104,7 +105,7 @@ model Login {
   role                  Role?
   isactive              Boolean   @default(true)
   createdBy             String?
-  createdAt             DateTime  @default(now()) 
+  createdAt             DateTime  @default(now())
   updatedBy             String?
   updatedAt             DateTime  @updatedAt
 
@@ -115,7 +116,6 @@ model Login {
   super_admin SuperAdmin? @relation(fields: [super_admin_id], references: [super_admin_id])
   tenant      Tenant?     @relation(fields: [tenant_id], references: [tenant_id])
   user        User?       @relation(fields: [user_id], references: [user_id])
-
 }
 
 // ============================================
@@ -132,6 +132,7 @@ model Event {
   event_organizer_phone_number String?
   event_organizer_email_id     String?
   profile_url                  String?
+  is_ai_event                  Boolean   @default(false)
   isactive                     Boolean   @default(true)
   createdBy                    String
   createdAt                    DateTime  @default(now())
@@ -144,7 +145,6 @@ model Event {
   uploaded_media    UploadedMedia[]
   user_favourites   UserFavouriteMediaMapping[]
   tenant_favourites TenantFavouriteMediaMapping[]
-
 }
 
 // ============================================
@@ -168,8 +168,6 @@ model EventTenantMapping {
   @@index([tenant_id])
   @@index([event_id, tenant_id])
 }
-
-
 
 // ============================================
 // EVENT USER MAPPING
@@ -223,7 +221,6 @@ model MediaUploadStage {
 
   event          Event          @relation(fields: [event_id], references: [event_id])
   uploaded_media UploadedMedia?
-
 }
 
 // ============================================
@@ -245,11 +242,10 @@ model UploadedMedia {
   updatedBy              String?
   updatedAt              DateTime @updatedAt
 
-  event             Event?                           @relation(fields: [event_id], references: [event_id])
-  upload_stages     MediaUploadStage?                @relation(fields: [media_upload_stage_id], references: [media_upload_stage_id])
+  event             Event?                        @relation(fields: [event_id], references: [event_id])
+  upload_stages     MediaUploadStage?             @relation(fields: [media_upload_stage_id], references: [media_upload_stage_id])
   favourites        UserFavouriteMediaMapping[]
   tenant_favourites TenantFavouriteMediaMapping[]
-
 }
 
 // ============================================
@@ -288,7 +284,6 @@ model TenantSettings {
   updatedAt             DateTime @updatedAt
 
   tenant Tenant? @relation(fields: [tenant_id], references: [tenant_id])
-
 }
 
 // ============================================
@@ -321,4 +316,111 @@ model TokenBlocklist {
   expiresAt DateTime
 
   @@index([expiresAt])
+}
+
+// ============================================
+// SUBSCRIPTION PLANS + WALLET
+// ============================================
+enum PlanType {
+  SUBSCRIPTION
+  WALLET
+}
+
+enum DurationUnit {
+  DAYS
+  MONTHS
+  YEARS
+}
+
+enum TenantSubscriptionStatus {
+  TRIAL
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum WalletTransactionType {
+  RECHARGE
+  AI_USAGE
+  ADJUSTMENT
+}
+
+model SubscriptionPlan {
+  subscription_plan_id     String        @id @default(uuid())
+  plan_name                String
+  plan_type                PlanType
+  duration_value           Int?
+  duration_unit            DurationUnit?
+  photo_quota              Int?
+  price                    Decimal       @db.Decimal(10, 2)
+  wallet_credits           Int?
+  ai_credit_cost_per_photo Int?
+  price_lock_window_days   Int           @default(0)
+  display_order            Int           @default(0)
+  launched_at              DateTime?
+  isactive                 Boolean       @default(true)
+  createdBy                String
+  createdAt                DateTime      @default(now())
+  updatedBy                String?
+  updatedAt                DateTime      @updatedAt
+
+  tenant_subscriptions TenantSubscription[]
+
+  @@index([display_order])
+}
+
+model TenantSubscription {
+  tenant_subscription_id String                   @id @default(uuid())
+  tenant_id              String
+  subscription_plan_id   String?
+  status                 TenantSubscriptionStatus
+  locked_price           Decimal?                 @db.Decimal(10, 2)
+  is_price_locked        Boolean                  @default(false)
+  photo_quota_total      Int
+  photo_quota_used       Int                      @default(0)
+  starts_at              DateTime                 @default(now())
+  expires_at             DateTime?
+  isactive               Boolean                  @default(true)
+  createdBy              String
+  createdAt              DateTime                 @default(now())
+  updatedBy              String?
+  updatedAt              DateTime                 @updatedAt
+
+  tenant Tenant            @relation(fields: [tenant_id], references: [tenant_id])
+  plan   SubscriptionPlan? @relation(fields: [subscription_plan_id], references: [subscription_plan_id])
+
+  @@index([tenant_id])
+  @@index([tenant_id, isactive])
+}
+
+model TenantWallet {
+  tenant_wallet_id String   @id @default(uuid())
+  tenant_id        String   @unique
+  balance_credits  Int      @default(0)
+  isactive         Boolean  @default(true)
+  createdBy        String
+  createdAt        DateTime @default(now())
+  updatedBy        String?
+  updatedAt        DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenant_id], references: [tenant_id])
+}
+
+model WalletTransaction {
+  wallet_transaction_id String                @id @default(uuid())
+  tenant_id             String
+  type                  WalletTransactionType
+  credits               Int
+  balance_after         Int
+  reference             String?
+  notes                 String?
+  isactive              Boolean               @default(true)
+  createdBy             String
+  createdAt             DateTime              @default(now())
+  updatedBy             String?
+  updatedAt             DateTime              @updatedAt
+
+  tenant Tenant @relation(fields: [tenant_id], references: [tenant_id])
+
+  @@index([tenant_id])
 }

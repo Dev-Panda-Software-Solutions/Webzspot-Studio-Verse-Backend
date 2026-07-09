@@ -35,6 +35,8 @@ const favouriteRoutes = require("./routes/favouriteRoutes")
 const tenantFavouriteRoutes = require("./routes/tenantFavouriteRoutes")
 const tenantSettingsRoutes = require("./routes/tenantSettingsRoutes")
 const uploadRoutes = require("./routes/uploadRoutes")
+const subscriptionPlanRoutes = require("./routes/subscriptionPlanRoutes")
+const tenantSubscriptionRoutes = require("./routes/tenantSubscriptionRoutes")
 const { loginLimiter, uploadLimiter, publicUploadLimiter } = require("./middleware/rateLimiter")
 const { pruneExpired } = require("./utils/tokenBlocklist")
 
@@ -91,6 +93,8 @@ app.use("/api/favourites", favouriteRoutes)
 app.use("/api/tenant-favourites", tenantFavouriteRoutes)
 app.use("/api/tenant-settings", tenantSettingsRoutes)
 app.use("/api/upload", uploadRoutes)
+app.use("/api/subscription-plans", subscriptionPlanRoutes)
+app.use("/api/billing", tenantSubscriptionRoutes)
 // Branding/cover/profile assets — safe to serve publicly (not sensitive client media).
 // All event media files require authentication via /api/media token flow.
 const staticOpts = {

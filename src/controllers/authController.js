@@ -4,6 +4,7 @@ const crypto = require("crypto")
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 const { addToBlocklist } = require("../utils/tokenBlocklist")
+const { TRIAL_DURATION_DAYS, TRIAL_PHOTO_QUOTA, trialExpiryDate } = require("../utils/subscriptionAccess")
 
 const envInt = (key, fallback) => {
     const value = Number.parseInt(process.env[key], 10)
@@ -154,6 +155,19 @@ const tenantSignup = async (req, res) => {
         })
 
         await prisma.tenantSettings.create({ data: { tenant_id: tenant.tenant_id, createdBy: tenant.tenant_id } })
+
+        await prisma.tenantSubscription.create({
+            data: {
+                tenant_id: tenant.tenant_id,
+                subscription_plan_id: null,
+                status: "TRIAL",
+                photo_quota_total: TRIAL_PHOTO_QUOTA,
+                photo_quota_used: 0,
+                starts_at: new Date(),
+                expires_at: trialExpiryDate(),
+                createdBy: "SELF_SIGNUP"
+            }
+        })
 
         const jti = crypto.randomUUID()
         const token = jwt.sign({ id: loginRecord.transid, role: "ADMIN", jti }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN })

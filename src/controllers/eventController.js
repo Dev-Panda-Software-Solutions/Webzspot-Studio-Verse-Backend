@@ -3,6 +3,7 @@ const fs = require("fs")
 const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { assertAiEventAllowed, SubscriptionAccessError } = require("../utils/subscriptionAccess")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
 
@@ -11,8 +12,19 @@ const createEvent = async (req, res) => {
         const {
             event_name, event_description, event_date, event_time, event_venue,
             event_organizer, event_organizer_phone_number, event_organizer_email_id,
-            profile_url, user_ids
+            profile_url, user_ids, is_ai_event
         } = req.body
+
+        const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+
+        if (is_ai_event && loginRecord?.tenant_id) {
+            try {
+                await assertAiEventAllowed(loginRecord.tenant_id)
+            } catch (accessErr) {
+                if (accessErr instanceof SubscriptionAccessError) return errorResponse(res, accessErr.message, accessErr.statusCode)
+                throw accessErr
+            }
+        }
 
         const event = await prisma.event.create({
             data: {
@@ -20,11 +32,10 @@ const createEvent = async (req, res) => {
                 event_date: event_date ? new Date(event_date) : null,
                 event_time, event_venue, event_organizer,
                 event_organizer_phone_number, event_organizer_email_id,
-                profile_url, createdBy: req.user?.id || "SYSTEM"
+                profile_url, is_ai_event: Boolean(is_ai_event), createdBy: req.user?.id || "SYSTEM"
             }
         })
 
-        const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
         if (loginRecord?.tenant_id) {
             await prisma.eventTenantMapping.create({
                 data: { event_id: event.event_id, tenant_id: loginRecord.tenant_id, collaboration_role: "OWNER", createdBy: req.user?.id || "SYSTEM" }

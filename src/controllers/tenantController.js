@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs")
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { TRIAL_PHOTO_QUOTA, trialExpiryDate } = require("../utils/subscriptionAccess")
 
 const createTenant = async (req, res) => {
     try {
@@ -21,7 +22,19 @@ const createTenant = async (req, res) => {
 
         await Promise.all([
             prisma.login.create({ data: { username, password_hash: hashedPassword, role: "ADMIN", tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } }),
-            prisma.tenantSettings.create({ data: { tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } })
+            prisma.tenantSettings.create({ data: { tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } }),
+            prisma.tenantSubscription.create({
+                data: {
+                    tenant_id: tenant.tenant_id,
+                    subscription_plan_id: null,
+                    status: "TRIAL",
+                    photo_quota_total: TRIAL_PHOTO_QUOTA,
+                    photo_quota_used: 0,
+                    starts_at: new Date(),
+                    expires_at: trialExpiryDate(),
+                    createdBy: req.user?.id || "SYSTEM"
+                }
+            })
         ])
 
         return successResponse(res, tenant, "Tenant Created Successfully.", 201)

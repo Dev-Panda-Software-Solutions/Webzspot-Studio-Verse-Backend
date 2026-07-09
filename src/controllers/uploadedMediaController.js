@@ -5,6 +5,7 @@ const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { withMediaUrls, withMediaUrl } = require("../utils/mediaUrl")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { assertQuotaAvailable, consumeQuota, deductAiCredits, SubscriptionAccessError } = require("../utils/subscriptionAccess")
 
 const MAX_LARGE_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -62,6 +63,18 @@ const uploadMedia = async (req, res) => {
                 where: { event_id, tenant_id: loginRecord.tenant_id, isactive: true }
             })
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+        }
+
+        const tenant_id = loginRecord.tenant_id
+        if (tenant_id) {
+            try {
+                await assertQuotaAvailable(tenant_id)
+                const event = await prisma.event.findUnique({ where: { event_id }, select: { is_ai_event: true } })
+                if (event?.is_ai_event) await deductAiCredits(tenant_id, 1, event_id)
+            } catch (accessErr) {
+                if (accessErr instanceof SubscriptionAccessError) return errorResponse(res, accessErr.message, accessErr.statusCode)
+                throw accessErr
+            }
         }
 
         const file = req.file
@@ -178,6 +191,8 @@ const uploadMedia = async (req, res) => {
         fs.unlink(originalPath, () => {})
         if (compressedImageCreated && compressedPath !== originalPath) fs.unlink(compressedPath, () => {})
 
+        if (tenant_id) await consumeQuota(tenant_id)
+
         return successResponse(res, media, 'Media Uploaded Successfully.', 201)
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
@@ -189,6 +204,15 @@ const initiateLargeUpload = async (req, res) => {
         const { event_id, file_name, file_type, file_size } = req.body
         const accessError = await assertCanUploadToEvent(req, event_id)
         if (accessError) return errorResponse(res, accessError, accessError === 'Unauthorized.' ? 401 : 403)
+
+        if (req.loginRecord?.tenant_id) {
+            try {
+                await assertQuotaAvailable(req.loginRecord.tenant_id)
+            } catch (quotaErr) {
+                if (quotaErr instanceof SubscriptionAccessError) return errorResponse(res, quotaErr.message, quotaErr.statusCode)
+                throw quotaErr
+            }
+        }
 
         const size = Number(file_size)
         if (!Number.isFinite(size) || size <= 0) return errorResponse(res, 'file_size is required.', 400)
@@ -262,6 +286,18 @@ const completeLargeUpload = async (req, res) => {
         if (!Number.isFinite(size) || size <= 0) return errorResponse(res, 'file_size is required.', 400)
         if (size > MAX_LARGE_UPLOAD_BYTES) return errorResponse(res, 'File too large. Maximum allowed is 5GB per file.', 413)
 
+        const tenant_id = req.loginRecord?.tenant_id
+        if (tenant_id) {
+            try {
+                await assertQuotaAvailable(tenant_id)
+                const event = await prisma.event.findUnique({ where: { event_id }, select: { is_ai_event: true } })
+                if (event?.is_ai_event) await deductAiCredits(tenant_id, 1, event_id)
+            } catch (accessErr) {
+                if (accessErr instanceof SubscriptionAccessError) return errorResponse(res, accessErr.message, accessErr.statusCode)
+                throw accessErr
+            }
+        }
+
         const mediaServerPath = await s3Storage.completeMultipartUpload({ key, uploadId: upload_id, parts })
         const sizeLabel = formatKb(size)
         const media = await prisma.uploadedMedia.create({
@@ -294,6 +330,8 @@ const completeLargeUpload = async (req, res) => {
                 updatedBy: req.user?.id || "SYSTEM"
             }
         })
+
+        if (tenant_id) await consumeQuota(tenant_id)
 
         return successResponse(res, media, 'Large media uploaded successfully.', 201)
     } catch (err) {

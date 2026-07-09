@@ -65,11 +65,15 @@ app.use(helmet({
     }
 }))
 
-app.use(cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"]
-}))
+const corsOptions = {
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+    optionsSuccessStatus: 204
+}
+
+app.use(cors(corsOptions))
+app.options(/.*/, cors(corsOptions))
 
 app.use(express.json({ limit: "10kb" }))
 

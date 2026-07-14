@@ -17,6 +17,16 @@ const buildSubscriptionSummary = async (tenant_id) => {
     return { subscription, wallet }
 }
 
+const formatDate = (date) => new Date(date).toISOString().slice(0, 10)
+
+// Plans with a special-access cutoff are only usable by studios that joined before that date.
+const assertPlanVisibleToTenant = (plan, tenant) => {
+    if (!plan.special_access_cutoff_date) return
+    if (new Date(tenant.createdAt) >= new Date(plan.special_access_cutoff_date)) {
+        throw new Error(`This plan is only available to studios that joined before ${formatDate(plan.special_access_cutoff_date)}.`)
+    }
+}
+
 const getMySubscription = async (req, res) => {
     try {
         const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
@@ -46,12 +56,19 @@ const subscribeToPlan = async (req, res) => {
         if (!loginRecord?.tenant_id) return errorResponse(res, "Only studio accounts can subscribe to a plan.", 403)
         const tenant_id = loginRecord.tenant_id
 
-        const plan = await prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } })
+        const [plan, tenant] = await Promise.all([
+            prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } }),
+            prisma.tenant.findUnique({ where: { tenant_id }, select: { createdAt: true } })
+        ])
         if (!plan || !plan.isactive) return errorResponse(res, "Plan not found.", 404)
 
+        try {
+            assertPlanVisibleToTenant(plan, tenant)
+        } catch (visibilityErr) {
+            return errorResponse(res, visibilityErr.message, 403)
+        }
+
         const now = new Date()
-        const isWithinLockWindow = plan.launched_at && plan.price_lock_window_days > 0
-            && now <= new Date(new Date(plan.launched_at).getTime() + plan.price_lock_window_days * 24 * 60 * 60 * 1000)
 
         const [, subscription] = await prisma.$transaction([
             prisma.tenantSubscription.updateMany({
@@ -64,7 +81,7 @@ const subscribeToPlan = async (req, res) => {
                     subscription_plan_id: plan.subscription_plan_id,
                     status: "ACTIVE",
                     locked_price: plan.price,
-                    is_price_locked: Boolean(isWithinLockWindow),
+                    is_price_locked: true,
                     photo_quota_total: plan.plan_type === "SUBSCRIPTION" ? plan.photo_quota : 0,
                     photo_quota_used: 0,
                     starts_at: now,
@@ -97,9 +114,18 @@ const rechargeWallet = async (req, res) => {
         if (!loginRecord?.tenant_id) return errorResponse(res, "Only studio accounts can recharge a wallet.", 403)
         const tenant_id = loginRecord.tenant_id
 
-        const plan = await prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } })
+        const [plan, tenant] = await Promise.all([
+            prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } }),
+            prisma.tenant.findUnique({ where: { tenant_id }, select: { createdAt: true } })
+        ])
         if (!plan || !plan.isactive || plan.plan_type !== "WALLET") {
             return errorResponse(res, "Invalid wallet recharge plan.", 400)
+        }
+
+        try {
+            assertPlanVisibleToTenant(plan, tenant)
+        } catch (visibilityErr) {
+            return errorResponse(res, visibilityErr.message, 403)
         }
 
         const wallet = await prisma.tenantWallet.upsert({

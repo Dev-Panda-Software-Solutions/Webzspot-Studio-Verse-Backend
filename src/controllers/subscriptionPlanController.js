@@ -5,8 +5,7 @@ const createPlan = async (req, res) => {
     try {
         const {
             plan_name, plan_type, duration_value, duration_unit, photo_quota,
-            price, wallet_credits, ai_credit_cost_per_photo, price_lock_window_days,
-            launched_at
+            price, wallet_credits, ai_credit_cost_per_photo
         } = req.body
 
         const maxOrder = await prisma.subscriptionPlan.aggregate({ _max: { display_order: true } })
@@ -22,8 +21,6 @@ const createPlan = async (req, res) => {
                 price,
                 wallet_credits: plan_type === "WALLET" ? wallet_credits : null,
                 ai_credit_cost_per_photo: plan_type === "WALLET" ? ai_credit_cost_per_photo : null,
-                price_lock_window_days: price_lock_window_days || 0,
-                launched_at: launched_at ? new Date(launched_at) : new Date(),
                 display_order,
                 createdBy: req.user?.id || "SYSTEM"
             }
@@ -39,7 +36,24 @@ const getAllPlans = async (req, res) => {
         const page = Math.max(1, parseInt(req.query.page) || 1)
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50))
         const skip = (page - 1) * limit
-        const where = { isactive: true }
+        let where = { isactive: true }
+
+        // ADMIN (studio) catalog is scoped: plans with a special-access cutoff are only
+        // visible to studios that joined before that date. SUPER_ADMIN always sees everything.
+        if (req.user.role === "ADMIN") {
+            const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+            const tenant = loginRecord?.tenant_id
+                ? await prisma.tenant.findUnique({ where: { tenant_id: loginRecord.tenant_id }, select: { createdAt: true } })
+                : null
+            where = {
+                ...where,
+                OR: [
+                    { special_access_cutoff_date: null },
+                    ...(tenant ? [{ special_access_cutoff_date: { gt: tenant.createdAt } }] : [])
+                ]
+            }
+        }
+
         const [items, total] = await Promise.all([
             prisma.subscriptionPlan.findMany({ where, skip, take: limit, orderBy: { display_order: "asc" } }),
             prisma.subscriptionPlan.count({ where })
@@ -67,8 +81,7 @@ const updatePlan = async (req, res) => {
 
         const {
             plan_name, plan_type, duration_value, duration_unit, photo_quota,
-            price, wallet_credits, ai_credit_cost_per_photo, price_lock_window_days,
-            launched_at
+            price, wallet_credits, ai_credit_cost_per_photo
         } = req.body
         const effectiveType = plan_type || existing.plan_type
 
@@ -82,8 +95,6 @@ const updatePlan = async (req, res) => {
                 price,
                 wallet_credits: effectiveType === "WALLET" ? wallet_credits : null,
                 ai_credit_cost_per_photo: effectiveType === "WALLET" ? ai_credit_cost_per_photo : null,
-                price_lock_window_days,
-                launched_at: launched_at ? new Date(launched_at) : undefined,
                 updatedBy: req.user?.id
             }
         })
@@ -113,6 +124,22 @@ const reorderPlans = async (req, res) => {
     }
 }
 
+const setSpecialAccess = async (req, res) => {
+    try {
+        const { cutoff_date } = req.body
+        const plan = await prisma.subscriptionPlan.update({
+            where: { subscription_plan_id: req.params.id },
+            data: {
+                special_access_cutoff_date: cutoff_date ? new Date(cutoff_date) : null,
+                updatedBy: req.user?.id
+            }
+        })
+        return successResponse(res, plan, cutoff_date ? "Special Access Updated Successfully." : "Special Access Cleared.")
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
 const deletePlan = async (req, res) => {
     try {
         await prisma.subscriptionPlan.update({
@@ -134,4 +161,4 @@ const hardDeletePlan = async (req, res) => {
     }
 }
 
-module.exports = { createPlan, getAllPlans, getPlanById, updatePlan, reorderPlans, deletePlan, hardDeletePlan }
+module.exports = { createPlan, getAllPlans, getPlanById, updatePlan, reorderPlans, setSpecialAccess, deletePlan, hardDeletePlan }

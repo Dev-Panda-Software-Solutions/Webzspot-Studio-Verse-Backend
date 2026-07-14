@@ -17,7 +17,12 @@ const createEvent = async (req, res) => {
 
         const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
 
-        if (is_ai_event && loginRecord?.tenant_id) {
+        if (is_ai_event) {
+            // AI events are a studio/wallet feature — a tenant-less caller (e.g. SUPER_ADMIN)
+            // has no wallet to check against, so it can never create one.
+            if (!loginRecord?.tenant_id) {
+                return errorResponse(res, "AI events require an active Wallet plan. Only studio accounts on a Wallet plan can create AI events.", 403)
+            }
             try {
                 await assertAiEventAllowed(loginRecord.tenant_id)
             } catch (accessErr) {

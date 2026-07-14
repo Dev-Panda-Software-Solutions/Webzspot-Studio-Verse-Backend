@@ -346,23 +346,22 @@ enum WalletTransactionType {
 }
 
 model SubscriptionPlan {
-  subscription_plan_id     String        @id @default(uuid())
-  plan_name                String
-  plan_type                PlanType
-  duration_value           Int?
-  duration_unit            DurationUnit?
-  photo_quota              Int?
-  price                    Decimal       @db.Decimal(10, 2)
-  wallet_credits           Int?
-  ai_credit_cost_per_photo Int?
-  price_lock_window_days   Int           @default(0)
-  display_order            Int           @default(0)
-  launched_at              DateTime?
-  isactive                 Boolean       @default(true)
-  createdBy                String
-  createdAt                DateTime      @default(now())
-  updatedBy                String?
-  updatedAt                DateTime      @updatedAt
+  subscription_plan_id       String        @id @default(uuid())
+  plan_name                  String
+  plan_type                  PlanType
+  duration_value             Int?
+  duration_unit              DurationUnit?
+  photo_quota                Int?
+  price                      Decimal       @db.Decimal(10, 2)
+  wallet_credits             Int?
+  ai_credit_cost_per_photo   Int?
+  special_access_cutoff_date DateTime?
+  display_order              Int           @default(0)
+  isactive                   Boolean       @default(true)
+  createdBy                  String
+  createdAt                  DateTime      @default(now())
+  updatedBy                  String?
+  updatedAt                  DateTime      @updatedAt
 
   tenant_subscriptions TenantSubscription[]
 

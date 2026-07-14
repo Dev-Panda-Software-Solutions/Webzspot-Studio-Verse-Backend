@@ -13,20 +13,26 @@ const addFavourite = async (req, res) => {
 
         const user_id = loginRecord.user_id
 
-        // Check event access, media existence, and duplicate all in parallel
+        // Check event access, media existence, and any prior favourite (active or not) in parallel
         const [eventAccess, media, existing] = await Promise.all([
             prisma.eventUserMapping.findFirst({ where: { event_id, user_id, isactive: true }, select: { event_user_id: true } }),
             prisma.uploadedMedia.findFirst({ where: { media_id, event_id, isactive: true } }),
-            prisma.userFavouriteMediaMapping.findFirst({ where: { event_id, user_id, media_id, isactive: true } })
+            prisma.userFavouriteMediaMapping.findFirst({ where: { event_id, user_id, media_id } })
         ])
 
         if (!eventAccess) return errorResponse(res, 'You do not have access to this event.', 403)
         if (!media) return errorResponse(res, 'Media not found in this event.', 404)
-        if (existing) return errorResponse(res, 'Already in favourites.', 400)
+        if (existing?.isactive) return errorResponse(res, 'Already in favourites.', 400)
 
-        const favourite = await prisma.userFavouriteMediaMapping.create({
-            data: { event_id, user_id, media_id, createdBy: req.user?.id }
-        })
+        // Reactivate a previously-removed favourite instead of creating a duplicate row
+        const favourite = existing
+            ? await prisma.userFavouriteMediaMapping.update({
+                where: { user_favourite_media_id: existing.user_favourite_media_id },
+                data: { isactive: true, updatedBy: req.user?.id }
+            })
+            : await prisma.userFavouriteMediaMapping.create({
+                data: { event_id, user_id, media_id, createdBy: req.user?.id }
+            })
         return successResponse(res, favourite, 'Media Added To Favourites Successfully.', 201)
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))

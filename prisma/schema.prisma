@@ -49,6 +49,8 @@ model Tenant {
   tenant_studio_address String
   profile_url           String?
   role                  Role     @default(ADMIN)
+  // One-time flag — the free trial is opt-in and can only ever be activated once per tenant.
+  trial_activated_at    DateTime?
   isactive              Boolean  @default(true)
   createdBy             String   @default("SYSTEM")
   createdAt             DateTime @default(now())

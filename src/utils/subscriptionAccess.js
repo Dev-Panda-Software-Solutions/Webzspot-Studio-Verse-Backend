@@ -40,31 +40,14 @@ const getActiveSubscription = async (tenant_id) => {
     })
 }
 
-// Every tenant should always carry an active subscription — this only kicks
-// in for pre-existing tenants left without one (e.g. from data created before
-// this trial-provisioning existed), rather than hard-blocking their uploads.
-const ensureActiveSubscription = async (tenant_id) => {
-    const existing = await getActiveSubscription(tenant_id)
-    if (existing) return existing
-
-    const settings = await getPlatformSettings()
-    return prisma.tenantSubscription.create({
-        data: {
-            tenant_id,
-            subscription_plan_id: null,
-            status: "TRIAL",
-            photo_quota_total: settings.trial_photo_quota,
-            photo_quota_used: 0,
-            starts_at: new Date(),
-            expires_at: trialExpiryDate(settings.trial_duration_days),
-            createdBy: "SYSTEM"
-        },
-        include: { plan: true }
-    })
-}
-
+// The free trial is opt-in (see activateTrial below) — a tenant with no
+// active subscription is a normal, expected state until they activate their
+// trial or subscribe to a plan, so no auto-provisioning happens here.
 const assertQuotaAvailable = async (tenant_id) => {
-    const subscription = await ensureActiveSubscription(tenant_id)
+    const subscription = await getActiveSubscription(tenant_id)
+    if (!subscription) {
+        throw new SubscriptionAccessError("No active plan. Activate your free trial or subscribe to a plan to start uploading.", 403)
+    }
 
     const now = new Date()
     if (subscription.expires_at && now > new Date(subscription.expires_at)) {
@@ -73,6 +56,40 @@ const assertQuotaAvailable = async (tenant_id) => {
     if (subscription.photo_quota_used >= subscription.photo_quota_total) {
         throw new SubscriptionAccessError("Your photo upload quota has been used up for this plan period.", 403)
     }
+    return subscription
+}
+
+// One-time trial activation — a tenant may only ever activate the free trial
+// once, tracked permanently via Tenant.trial_activated_at (independent of
+// whether the resulting TenantSubscription later expires or gets replaced).
+const activateTrial = async (tenant_id) => {
+    const tenant = await prisma.tenant.findUnique({ where: { tenant_id }, select: { trial_activated_at: true } })
+    if (tenant?.trial_activated_at) {
+        throw new SubscriptionAccessError("You've already used your free trial.", 400)
+    }
+
+    const settings = await getPlatformSettings()
+    const now = new Date()
+
+    const [, , subscription] = await prisma.$transaction([
+        prisma.tenant.update({ where: { tenant_id }, data: { trial_activated_at: now } }),
+        prisma.tenantSubscription.updateMany({
+            where: { tenant_id, isactive: true },
+            data: { isactive: false, status: "CANCELLED" }
+        }),
+        prisma.tenantSubscription.create({
+            data: {
+                tenant_id,
+                subscription_plan_id: null,
+                status: "TRIAL",
+                photo_quota_total: settings.trial_photo_quota,
+                photo_quota_used: 0,
+                starts_at: now,
+                expires_at: trialExpiryDate(settings.trial_duration_days, now),
+                createdBy: tenant_id
+            }
+        })
+    ])
     return subscription
 }
 
@@ -139,7 +156,7 @@ module.exports = {
     getPlatformSettings,
     trialExpiryDate,
     getActiveSubscription,
-    ensureActiveSubscription,
+    activateTrial,
     assertQuotaAvailable,
     consumeQuota,
     assertAiEventAllowed,

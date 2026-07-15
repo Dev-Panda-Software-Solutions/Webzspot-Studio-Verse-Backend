@@ -1,7 +1,6 @@
 const bcrypt = require("bcryptjs")
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { getPlatformSettings, trialExpiryDate } = require("../utils/subscriptionAccess")
 
 const createTenant = async (req, res) => {
     try {
@@ -20,22 +19,11 @@ const createTenant = async (req, res) => {
             data: { tenant_name, tenant_phone_number, tenant_email_id, tenant_studio_name, tenant_studio_address, profile_url, role: "ADMIN", createdBy: req.user?.id || "SYSTEM" }
         })
 
-        const trialSettings = await getPlatformSettings()
+        // No subscription is created here — the free trial is opt-in. The tenant
+        // activates it once from Billing (POST /api/billing/activate-trial).
         await Promise.all([
             prisma.login.create({ data: { username, password_hash: hashedPassword, role: "ADMIN", tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } }),
-            prisma.tenantSettings.create({ data: { tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } }),
-            prisma.tenantSubscription.create({
-                data: {
-                    tenant_id: tenant.tenant_id,
-                    subscription_plan_id: null,
-                    status: "TRIAL",
-                    photo_quota_total: trialSettings.trial_photo_quota,
-                    photo_quota_used: 0,
-                    starts_at: new Date(),
-                    expires_at: trialExpiryDate(trialSettings.trial_duration_days),
-                    createdBy: req.user?.id || "SYSTEM"
-                }
-            })
+            prisma.tenantSettings.create({ data: { tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } })
         ])
 
         return successResponse(res, tenant, "Tenant Created Successfully.", 201)

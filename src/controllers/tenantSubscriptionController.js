@@ -1,6 +1,6 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { getActiveSubscription } = require("../utils/subscriptionAccess")
+const { getActiveSubscription, activateTrial: activateTrialForTenant, SubscriptionAccessError } = require("../utils/subscriptionAccess")
 
 const computeExpiry = (plan, from = new Date()) => {
     if (plan.plan_type === "WALLET") return null
@@ -12,9 +12,12 @@ const computeExpiry = (plan, from = new Date()) => {
 }
 
 const buildSubscriptionSummary = async (tenant_id) => {
-    const subscription = await getActiveSubscription(tenant_id)
-    const wallet = await prisma.tenantWallet.findUnique({ where: { tenant_id } })
-    return { subscription, wallet }
+    const [subscription, wallet, tenant] = await Promise.all([
+        getActiveSubscription(tenant_id),
+        prisma.tenantWallet.findUnique({ where: { tenant_id } }),
+        prisma.tenant.findUnique({ where: { tenant_id }, select: { trial_activated_at: true } })
+    ])
+    return { subscription, wallet, trial_activated_at: tenant?.trial_activated_at || null }
 }
 
 const formatDate = (date) => new Date(date).toISOString().slice(0, 10)
@@ -157,4 +160,17 @@ const rechargeWallet = async (req, res) => {
     }
 }
 
-module.exports = { getMySubscription, getTenantSubscription, subscribeToPlan, rechargeWallet }
+const activateTrial = async (req, res) => {
+    try {
+        const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+        if (!loginRecord?.tenant_id) return errorResponse(res, "Only studio accounts can activate a trial.", 403)
+
+        const subscription = await activateTrialForTenant(loginRecord.tenant_id)
+        return successResponse(res, subscription, "Free Trial Activated Successfully.", 201)
+    } catch (err) {
+        if (err instanceof SubscriptionAccessError) return errorResponse(res, err.message, err.statusCode)
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+module.exports = { getMySubscription, getTenantSubscription, subscribeToPlan, rechargeWallet, activateTrial }

@@ -423,3 +423,14 @@ model WalletTransaction {
 
   @@index([tenant_id])
 }
+
+// Singleton row — platform-wide values a Super Admin can tune without a deploy.
+model PlatformSettings {
+  platform_settings_id String   @id @default(uuid())
+  trial_duration_days  Int      @default(7)
+  trial_photo_quota    Int      @default(200)
+  createdBy            String
+  createdAt            DateTime @default(now())
+  updatedBy            String?
+  updatedAt            DateTime @updatedAt
+}

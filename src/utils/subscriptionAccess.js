@@ -1,5 +1,8 @@
 const prisma = require("./prismaClient")
 
+// Fallback defaults — only used the very first time the platform settings
+// singleton row is lazily created. After that, Super Admin can edit the
+// live values via /api/platform-settings.
 const TRIAL_DURATION_DAYS = 7
 const TRIAL_PHOTO_QUOTA = 200
 
@@ -10,9 +13,22 @@ class SubscriptionAccessError extends Error {
     }
 }
 
-const trialExpiryDate = (from = new Date()) => {
+// Singleton row — created with the defaults above on first access.
+const getPlatformSettings = async () => {
+    const existing = await prisma.platformSettings.findFirst()
+    if (existing) return existing
+    return prisma.platformSettings.create({
+        data: {
+            trial_duration_days: TRIAL_DURATION_DAYS,
+            trial_photo_quota: TRIAL_PHOTO_QUOTA,
+            createdBy: "SYSTEM"
+        }
+    })
+}
+
+const trialExpiryDate = (days, from = new Date()) => {
     const expiry = new Date(from)
-    expiry.setDate(expiry.getDate() + TRIAL_DURATION_DAYS)
+    expiry.setDate(expiry.getDate() + days)
     return expiry
 }
 
@@ -24,9 +40,31 @@ const getActiveSubscription = async (tenant_id) => {
     })
 }
 
+// Every tenant should always carry an active subscription — this only kicks
+// in for pre-existing tenants left without one (e.g. from data created before
+// this trial-provisioning existed), rather than hard-blocking their uploads.
+const ensureActiveSubscription = async (tenant_id) => {
+    const existing = await getActiveSubscription(tenant_id)
+    if (existing) return existing
+
+    const settings = await getPlatformSettings()
+    return prisma.tenantSubscription.create({
+        data: {
+            tenant_id,
+            subscription_plan_id: null,
+            status: "TRIAL",
+            photo_quota_total: settings.trial_photo_quota,
+            photo_quota_used: 0,
+            starts_at: new Date(),
+            expires_at: trialExpiryDate(settings.trial_duration_days),
+            createdBy: "SYSTEM"
+        },
+        include: { plan: true }
+    })
+}
+
 const assertQuotaAvailable = async (tenant_id) => {
-    const subscription = await getActiveSubscription(tenant_id)
-    if (!subscription) throw new SubscriptionAccessError("No active subscription found. Please subscribe to a plan.", 403)
+    const subscription = await ensureActiveSubscription(tenant_id)
 
     const now = new Date()
     if (subscription.expires_at && now > new Date(subscription.expires_at)) {
@@ -98,8 +136,10 @@ module.exports = {
     TRIAL_DURATION_DAYS,
     TRIAL_PHOTO_QUOTA,
     SubscriptionAccessError,
+    getPlatformSettings,
     trialExpiryDate,
     getActiveSubscription,
+    ensureActiveSubscription,
     assertQuotaAvailable,
     consumeQuota,
     assertAiEventAllowed,

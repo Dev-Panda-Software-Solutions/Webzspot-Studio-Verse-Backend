@@ -45,24 +45,29 @@ const consumeQuota = async (tenant_id, count = 1) => {
     })
 }
 
+// AI events are gated on wallet credits alone — a studio on ANY subscription
+// plan (Basic, Pro, or Wallet) can use AI events as long as it has recharged
+// its wallet at least once and carries a positive balance. The wallet is a
+// feature add-on, not exclusive to tenants whose *active* plan happens to be
+// the Wallet type.
+const getAiCreditCostPerPhoto = async () => {
+    const walletPlan = await prisma.subscriptionPlan.findFirst({
+        where: { plan_type: "WALLET", isactive: true },
+        orderBy: { display_order: "asc" }
+    })
+    return walletPlan?.ai_credit_cost_per_photo || 0
+}
+
 const assertAiEventAllowed = async (tenant_id) => {
-    const subscription = await getActiveSubscription(tenant_id)
-    if (!subscription || subscription.plan?.plan_type !== "WALLET") {
-        throw new SubscriptionAccessError("AI events require an active Wallet plan.", 403)
-    }
     const wallet = await prisma.tenantWallet.findUnique({ where: { tenant_id } })
     if (!wallet || wallet.balance_credits <= 0) {
         throw new SubscriptionAccessError("Insufficient wallet credits. Please recharge your wallet.", 403)
     }
-    return { subscription, wallet }
+    return { wallet }
 }
 
 const deductAiCredits = async (tenant_id, photoCount, eventId) => {
-    const subscription = await getActiveSubscription(tenant_id)
-    if (!subscription || subscription.plan?.plan_type !== "WALLET") {
-        throw new SubscriptionAccessError("AI events require an active Wallet plan.", 403)
-    }
-    const costPerPhoto = subscription.plan?.ai_credit_cost_per_photo || 0
+    const costPerPhoto = await getAiCreditCostPerPhoto()
     const cost = costPerPhoto * photoCount
     if (cost <= 0) return null
 

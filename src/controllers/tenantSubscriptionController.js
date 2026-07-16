@@ -64,6 +64,11 @@ const subscribeToPlan = async (req, res) => {
             prisma.tenant.findUnique({ where: { tenant_id }, select: { createdAt: true } })
         ])
         if (!plan || !plan.isactive) return errorResponse(res, "Plan not found.", 404)
+        // Wallet plans are purchased via recharge (initial purchase + top-ups), not "subscribed to" —
+        // they aren't a primary plan swap and don't carry a photo quota/duration.
+        if (plan.plan_type === "WALLET") {
+            return errorResponse(res, "Wallet plans are purchased via recharge, not subscription.", 400)
+        }
 
         try {
             assertPlanVisibleToTenant(plan, tenant)
@@ -85,7 +90,7 @@ const subscribeToPlan = async (req, res) => {
                     status: "ACTIVE",
                     locked_price: plan.price,
                     is_price_locked: true,
-                    photo_quota_total: plan.plan_type === "SUBSCRIPTION" ? plan.photo_quota : 0,
+                    photo_quota_total: plan.photo_quota,
                     photo_quota_used: 0,
                     starts_at: now,
                     expires_at: computeExpiry(plan, now),
@@ -93,14 +98,6 @@ const subscribeToPlan = async (req, res) => {
                 }
             })
         ])
-
-        if (plan.plan_type === "WALLET") {
-            await prisma.tenantWallet.upsert({
-                where: { tenant_id },
-                create: { tenant_id, balance_credits: 0, createdBy: req.user?.id || "SYSTEM" },
-                update: {}
-            })
-        }
 
         return successResponse(res, subscription, "Subscribed Successfully.", 201)
     } catch (err) {
@@ -131,7 +128,15 @@ const rechargeWallet = async (req, res) => {
             return errorResponse(res, visibilityErr.message, 403)
         }
 
-        const wallet = await prisma.tenantWallet.upsert({
+        const existingWallet = await prisma.tenantWallet.findUnique({ where: { tenant_id } })
+        if (!existingWallet && plan.wallet_tier !== "INITIAL") {
+            return errorResponse(res, "You must purchase the initial wallet plan before you can top up.", 400)
+        }
+        if (existingWallet && plan.wallet_tier !== "TOPUP") {
+            return errorResponse(res, "You've already activated your wallet. Choose a top-up amount instead.", 400)
+        }
+
+        await prisma.tenantWallet.upsert({
             where: { tenant_id },
             create: { tenant_id, balance_credits: 0, createdBy: req.user?.id || "SYSTEM" },
             update: {}

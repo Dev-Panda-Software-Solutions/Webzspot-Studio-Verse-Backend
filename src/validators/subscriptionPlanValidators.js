@@ -7,7 +7,8 @@ const createPlanValidator = [
     body("duration_value").if(body("plan_type").equals("SUBSCRIPTION")).isInt({ min: 1 }).withMessage("duration_value is required for subscription plans."),
     body("duration_unit").if(body("plan_type").equals("SUBSCRIPTION")).isIn(["DAYS", "MONTHS", "YEARS"]).withMessage("duration_unit must be DAYS, MONTHS or YEARS."),
     body("photo_quota").if(body("plan_type").equals("SUBSCRIPTION")).isInt({ min: 1 }).withMessage("photo_quota is required for subscription plans."),
-    body("wallet_credits").if(body("plan_type").equals("WALLET")).isInt({ min: 1 }).withMessage("wallet_credits is required for wallet plans.")
+    body("wallet_credits").if(body("plan_type").equals("WALLET")).isInt({ min: 1 }).withMessage("wallet_credits is required for wallet plans."),
+    body("wallet_tier").if(body("plan_type").equals("WALLET")).isIn(["INITIAL", "TOPUP"]).withMessage("wallet_tier must be INITIAL or TOPUP for wallet plans.")
 ]
 
 const updatePlanValidator = [

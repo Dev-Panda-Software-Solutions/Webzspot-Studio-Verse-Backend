@@ -347,6 +347,14 @@ enum WalletTransactionType {
   ADJUSTMENT
 }
 
+// Only meaningful when plan_type = WALLET. INITIAL = the one-time first wallet
+// purchase a tenant must make before they have a wallet at all; TOPUP = a
+// recharge amount usable any number of times once the wallet already exists.
+enum WalletTier {
+  INITIAL
+  TOPUP
+}
+
 model SubscriptionPlan {
   subscription_plan_id       String        @id @default(uuid())
   plan_name                  String
@@ -356,6 +364,7 @@ model SubscriptionPlan {
   photo_quota                Int?
   price                      Decimal       @db.Decimal(10, 2)
   wallet_credits             Int?
+  wallet_tier                WalletTier?
   ai_credit_cost_per_photo   Int?
   special_access_cutoff_date DateTime?
   display_order              Int           @default(0)

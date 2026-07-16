@@ -5,7 +5,7 @@ const createPlan = async (req, res) => {
     try {
         const {
             plan_name, plan_type, duration_value, duration_unit, photo_quota,
-            price, wallet_credits, ai_credit_cost_per_photo
+            price, wallet_credits, wallet_tier, ai_credit_cost_per_photo
         } = req.body
 
         const maxOrder = await prisma.subscriptionPlan.aggregate({ _max: { display_order: true } })
@@ -20,6 +20,7 @@ const createPlan = async (req, res) => {
                 photo_quota: plan_type === "SUBSCRIPTION" ? photo_quota : null,
                 price,
                 wallet_credits: plan_type === "WALLET" ? wallet_credits : null,
+                wallet_tier: plan_type === "WALLET" ? wallet_tier : null,
                 ai_credit_cost_per_photo: plan_type === "WALLET" ? ai_credit_cost_per_photo : null,
                 display_order,
                 createdBy: req.user?.id || "SYSTEM"
@@ -81,7 +82,7 @@ const updatePlan = async (req, res) => {
 
         const {
             plan_name, plan_type, duration_value, duration_unit, photo_quota,
-            price, wallet_credits, ai_credit_cost_per_photo
+            price, wallet_credits, wallet_tier, ai_credit_cost_per_photo
         } = req.body
         const effectiveType = plan_type || existing.plan_type
 
@@ -94,6 +95,7 @@ const updatePlan = async (req, res) => {
                 photo_quota: effectiveType === "SUBSCRIPTION" ? photo_quota : null,
                 price,
                 wallet_credits: effectiveType === "WALLET" ? wallet_credits : null,
+                wallet_tier: effectiveType === "WALLET" ? (wallet_tier ?? existing.wallet_tier) : null,
                 ai_credit_cost_per_photo: effectiveType === "WALLET" ? ai_credit_cost_per_photo : null,
                 updatedBy: req.user?.id
             }

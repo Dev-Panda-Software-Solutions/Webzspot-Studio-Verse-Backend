@@ -3,7 +3,7 @@ const fs = require("fs")
 const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { assertAiEventAllowed, SubscriptionAccessError } = require("../utils/subscriptionAccess")
+const { assertAiEventAllowed, getActiveSubscription, SubscriptionAccessError } = require("../utils/subscriptionAccess")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
 
@@ -16,6 +16,21 @@ const createEvent = async (req, res) => {
         } = req.body
 
         const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+
+        // A studio with no photo quota left can't usefully create a new event —
+        // require at least 1 remaining photo, same threshold as an upload would need.
+        if (loginRecord?.tenant_id) {
+            const subscription = await getActiveSubscription(loginRecord.tenant_id)
+            if (!subscription) {
+                return errorResponse(res, "No active plan. Activate your free trial or subscribe to a plan to create events.", 403)
+            }
+            if (subscription.expires_at && new Date() > new Date(subscription.expires_at)) {
+                return errorResponse(res, "Your subscription has expired. Please renew or choose a new plan.", 403)
+            }
+            if (subscription.photo_quota_used >= subscription.photo_quota_total) {
+                return errorResponse(res, "Your photo upload quota is used up. Upgrade your plan to create new events.", 403)
+            }
+        }
 
         if (is_ai_event) {
             // AI events are gated on wallet credits, available to a studio on ANY
@@ -119,9 +134,6 @@ const getAllEvents = async (req, res) => {
             isactive: true,
             event: { isactive: true },
         }
-        // Explicit select intentionally excludes access_expires — that column may not exist yet
-        // in the DB if the migration hasn't run. All events default to has_current_access: true.
-        // Once the migration runs and the column exists, add access_expires: true here.
         const [mappings, total] = await Promise.all([
             prisma.eventUserMapping.findMany({
                 where,
@@ -130,6 +142,8 @@ const getAllEvents = async (req, res) => {
                     event_id: true,
                     user_id: true,
                     isactive: true,
+                    access_expires: true,
+                    favourite_limit: true,
                     createdAt: true,
                     event: true,
                 },
@@ -141,8 +155,9 @@ const getAllEvents = async (req, res) => {
             ...m.event,
             _access: {
                 event_user_id: m.event_user_id,
-                access_expires: null,
-                has_current_access: true,
+                access_expires: m.access_expires,
+                favourite_limit: m.favourite_limit,
+                has_current_access: !m.access_expires || new Date(m.access_expires) >= now,
             }
         }))
         return successResponse(res, { items, total, page, limit, pages: Math.ceil(total / limit) })

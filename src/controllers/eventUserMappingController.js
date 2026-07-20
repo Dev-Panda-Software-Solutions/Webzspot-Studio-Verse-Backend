@@ -70,7 +70,7 @@ const assignUserToEvent = async (req, res) => {
 const updateEventUserMapping = async (req, res) => {
     try {
         const { id } = req.params
-        const { access_expires, isactive } = req.body
+        const { access_expires, isactive, favourite_limit } = req.body
 
         const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: id }, select: { event_user_id: true, event_id: true } })
         if (!mapping) return errorResponse(res, 'Mapping not found.', 404)
@@ -89,12 +89,19 @@ const updateEventUserMapping = async (req, res) => {
             if (parsedExpiry != null) updateData.access_expires = parsedExpiry
         }
         if (isactive !== undefined) updateData.isactive = Boolean(isactive)
+        if (favourite_limit !== undefined) {
+            const parsedLimit = favourite_limit === null || favourite_limit === '' ? null : Number.parseInt(favourite_limit, 10)
+            if (parsedLimit !== null && (!Number.isFinite(parsedLimit) || parsedLimit < 0)) {
+                return errorResponse(res, 'favourite_limit must be a non-negative integer or null.', 400)
+            }
+            updateData.favourite_limit = parsedLimit
+        }
 
         const updated = await prisma.eventUserMapping.update({
             where: { event_user_id: id },
             data: updateData,
             select: {
-                event_user_id: true, isactive: true,
+                event_user_id: true, isactive: true, favourite_limit: true,
                 user: { select: { user_id: true, user_name: true, user_email_id: true } }
             }
         })
@@ -122,8 +129,10 @@ const getUsersByEvent = async (req, res) => {
                 event_user_id: true,
                 event_id: true,
                 isactive: true,
+                access_expires: true,
+                favourite_limit: true,
                 createdAt: true,
-                user: { select: { user_id: true, user_name: true, user_email_id: true, user_phone_number: true } }
+                user: { select: { user_id: true, user_name: true, user_email_id: true, user_phone_number: true, isactive: true } }
             },
             orderBy: { createdAt: 'asc' }
         })

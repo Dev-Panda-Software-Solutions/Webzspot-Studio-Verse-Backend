@@ -175,15 +175,17 @@ model EventTenantMapping {
 // EVENT USER MAPPING
 // ============================================
 model EventUserMapping {
-  event_user_id  String    @id @default(uuid())
-  event_id       String
-  user_id        String
-  isactive       Boolean   @default(true)
-  access_expires DateTime?
-  createdBy      String
-  createdAt      DateTime  @default(now())
-  updatedBy      String?
-  updatedAt      DateTime  @updatedAt
+  event_user_id   String    @id @default(uuid())
+  event_id        String
+  user_id         String
+  isactive        Boolean   @default(true)
+  access_expires  DateTime?
+  // Max number of photos this client may favourite for this event. null = unlimited.
+  favourite_limit Int?
+  createdBy       String
+  createdAt       DateTime  @default(now())
+  updatedBy       String?
+  updatedAt       DateTime  @updatedAt
 
   event Event @relation(fields: [event_id], references: [event_id])
   user  User  @relation(fields: [user_id], references: [user_id])

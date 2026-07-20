@@ -109,13 +109,27 @@ const getAllUsers = async (req, res) => {
             where.created_by_tenant_id = loginRecord?.tenant_id
         }
 
-        const [items, total] = await Promise.all([
+        const [rawItems, total] = await Promise.all([
             prisma.user.findMany({
                 where, skip, take: limit, orderBy: { createdAt: 'desc' },
-                include: { created_by: { select: { tenant_studio_name: true } } }
+                include: {
+                    created_by: { select: { tenant_studio_name: true } },
+                    // Same-named clients are easy to confuse in a flat list — surface
+                    // which event(s) they belong to so the frontend can disambiguate.
+                    event_mapping: {
+                        where: { isactive: true },
+                        select: { event: { select: { event_name: true } } },
+                        take: 3
+                    }
+                }
             }),
             prisma.user.count({ where })
         ])
+
+        const items = rawItems.map(({ event_mapping, ...u }) => ({
+            ...u,
+            event_names: event_mapping.map(m => m.event?.event_name).filter(Boolean)
+        }))
 
         return successResponse(res, { items, total, page, limit, pages: Math.ceil(total / limit) })
     } catch (err) {
@@ -192,7 +206,13 @@ const hardDeleteUser = async (req, res) => {
             return errorResponse(res, 'You can only permanently delete users you created.', 403)
         }
 
-        await prisma.user.delete({ where: { user_id: req.params.id } })
+        // Every FK pointing at this User must be cleared first, or the delete fails.
+        await prisma.$transaction([
+            prisma.login.deleteMany({ where: { user_id: req.params.id } }),
+            prisma.eventUserMapping.deleteMany({ where: { user_id: req.params.id } }),
+            prisma.userFavouriteMediaMapping.deleteMany({ where: { user_id: req.params.id } }),
+            prisma.user.delete({ where: { user_id: req.params.id } })
+        ])
         return successResponse(res, null, 'User Permanently Deleted Successfully.')
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))

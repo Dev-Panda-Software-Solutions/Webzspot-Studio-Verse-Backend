@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs")
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { activateTrial } = require("../utils/subscriptionAccess")
 
 const createTenant = async (req, res) => {
     try {
@@ -19,12 +20,15 @@ const createTenant = async (req, res) => {
             data: { tenant_name, tenant_phone_number, tenant_email_id, tenant_studio_name, tenant_studio_address, profile_url, role: "ADMIN", createdBy: req.user?.id || "SYSTEM" }
         })
 
-        // No subscription is created here — the free trial is opt-in. The tenant
-        // activates it once from Billing (POST /api/billing/activate-trial).
         await Promise.all([
             prisma.login.create({ data: { username, password_hash: hashedPassword, role: "ADMIN", tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } }),
             prisma.tenantSettings.create({ data: { tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } })
         ])
+
+        // Free trial is auto-granted on creation — no manual activation step.
+        await activateTrial(tenant.tenant_id).catch(err => {
+            console.error("[CreateTenant] Trial auto-activation failed:", err.message)
+        })
 
         return successResponse(res, tenant, "Tenant Created Successfully.", 201)
     } catch (err) {
@@ -100,7 +104,21 @@ const deleteTenant = async (req, res) => {
 
 const hardDeleteTenant = async (req, res) => {
     try {
-        await prisma.tenant.delete({ where: { tenant_id: req.params.id } })
+        const tenant_id = req.params.id
+        // Every FK that points at this tenant must be cleared before the row can be
+        // deleted. Clients (User) created by this tenant are kept — only the
+        // ownership pointer is cleared, since client accounts may outlive the studio.
+        await prisma.$transaction([
+            prisma.user.updateMany({ where: { created_by_tenant_id: tenant_id }, data: { created_by_tenant_id: null } }),
+            prisma.eventTenantMapping.deleteMany({ where: { tenant_id } }),
+            prisma.tenantFavouriteMediaMapping.deleteMany({ where: { tenant_id } }),
+            prisma.walletTransaction.deleteMany({ where: { tenant_id } }),
+            prisma.tenantWallet.deleteMany({ where: { tenant_id } }),
+            prisma.tenantSubscription.deleteMany({ where: { tenant_id } }),
+            prisma.tenantSettings.deleteMany({ where: { tenant_id } }),
+            prisma.login.deleteMany({ where: { tenant_id } }),
+            prisma.tenant.delete({ where: { tenant_id } }),
+        ])
         return successResponse(res, null, 'Tenant Permanently Deleted Successfully.')
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))

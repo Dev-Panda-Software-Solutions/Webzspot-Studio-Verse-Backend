@@ -60,10 +60,10 @@ const removeTenantFavourite = async (req, res) => {
 
 const getTenantFavouritesForEvent = async (req, res) => {
     try {
+        const { event_id } = req.params
         const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
         if (!loginRecord?.tenant_id) return errorResponse(res, 'Only studio accounts can view tenant favourites.', 403)
 
-        const { event_id } = req.params
         const favourites = await prisma.tenantFavouriteMediaMapping.findMany({
             where: { event_id, tenant_id: loginRecord.tenant_id, isactive: true },
             select: {
@@ -83,4 +83,37 @@ const getTenantFavouritesForEvent = async (req, res) => {
     }
 }
 
-module.exports = { addTenantFavourite, removeTenantFavourite, getTenantFavouritesForEvent }
+// Read-only, for clients browsing an event's gallery — lets them see which photos
+// the studio has already picked (shown as a distinct "Studio Pick" indicator),
+// without exposing add/remove access. Scoped to the event's OWNER tenant, since a
+// USER caller has no tenant_id of their own.
+const getTenantFavouriteIdsForEventAsUser = async (req, res) => {
+    try {
+        const { event_id } = req.params
+        const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+        if (!loginRecord?.user_id) return errorResponse(res, 'Only client accounts can use this endpoint.', 403)
+
+        const access = await prisma.eventUserMapping.findFirst({
+            where: { event_id, user_id: loginRecord.user_id, isactive: true },
+            select: { event_user_id: true }
+        })
+        if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+
+        const ownerMapping = await prisma.eventTenantMapping.findFirst({
+            where: { event_id, collaboration_role: 'OWNER', isactive: true },
+            select: { tenant_id: true }
+        })
+        if (!ownerMapping) return successResponse(res, [])
+
+        const favourites = await prisma.tenantFavouriteMediaMapping.findMany({
+            where: { event_id, tenant_id: ownerMapping.tenant_id, isactive: true },
+            select: { media_id: true }
+        })
+        return successResponse(res, favourites.map(f => f.media_id))
+    } catch (err) {
+        console.error("[TenantFavourites] User read failed:", err)
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+module.exports = { addTenantFavourite, removeTenantFavourite, getTenantFavouritesForEvent, getTenantFavouriteIdsForEventAsUser }

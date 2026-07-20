@@ -67,7 +67,9 @@ app.use(helmet({
 }))
 
 const corsOptions = {
-    origin: "*",
+    // Reflect whatever Origin the browser sends — allow every origin. More robust than a
+    // static "*" string across reverse proxies, which can mangle/strip a literal wildcard.
+    origin: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
     optionsSuccessStatus: 204

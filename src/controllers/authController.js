@@ -44,9 +44,21 @@ const login = async (req, res) => {
             return errorResponse(res, 'Invalid username or password.', 401)
         }
 
+        // Archived Tenant/User must not be able to log back in, even via the plain
+        // username path (only the email-lookup path above cross-checked this before).
+        if (loginRecord.tenant_id) {
+            const tenant = await prisma.tenant.findUnique({ where: { tenant_id: loginRecord.tenant_id }, select: { isactive: true } })
+            if (!tenant || !tenant.isactive) {
+                return errorResponse(res, 'This studio account has been deactivated. Please contact the platform administrator.', 403)
+            }
+        }
+
         if (loginRecord.user_id) {
             const user = await prisma.user.findUnique({ where: { user_id: loginRecord.user_id } })
-            if (user && new Date() > new Date(user.expiry_date)) {
+            if (!user || !user.isactive) {
+                return errorResponse(res, 'This account has been deactivated. Please contact your studio.', 403)
+            }
+            if (new Date() > new Date(user.expiry_date)) {
                 return errorResponse(res, 'Your account has expired. Please contact your studio.', 403)
             }
         }

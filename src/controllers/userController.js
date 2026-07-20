@@ -100,7 +100,9 @@ const getAllUsers = async (req, res) => {
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50))
         const skip = (page - 1) * limit
 
-        let where = { isactive: true }
+        // status: "active" (default) | "archived" | "all"
+        const status = req.query.status === "archived" ? false : req.query.status === "all" ? undefined : true
+        let where = status === undefined ? {} : { isactive: status }
 
         if (role !== "SUPER_ADMIN") {
             const loginRecord = await prisma.login.findUnique({ where: { transid: loginId } })
@@ -109,7 +111,7 @@ const getAllUsers = async (req, res) => {
 
         const [items, total] = await Promise.all([
             prisma.user.findMany({
-                where, skip, take: limit,
+                where, skip, take: limit, orderBy: { createdAt: 'desc' },
                 include: { created_by: { select: { tenant_studio_name: true } } }
             }),
             prisma.user.count({ where })
@@ -197,4 +199,25 @@ const hardDeleteUser = async (req, res) => {
     }
 }
 
-module.exports = { createUser, createUserInEvent, getAllUsers, getUserById, updateUser, deleteUser, hardDeleteUser }
+const restoreUser = async (req, res) => {
+    try {
+        const [existing, loginRecord] = await Promise.all([
+            prisma.user.findUnique({ where: { user_id: req.params.id } }),
+            req.user.role === "ADMIN" ? prisma.login.findUnique({ where: { transid: req.user?.id } }) : Promise.resolve(null)
+        ])
+        if (!existing) return errorResponse(res, 'User Not Found.', 404)
+        if (req.user.role === "ADMIN" && existing.created_by_tenant_id !== loginRecord?.tenant_id) {
+            return errorResponse(res, 'You can only restore users you created.', 403)
+        }
+
+        const user = await prisma.user.update({
+            where: { user_id: req.params.id },
+            data: { isactive: true, updatedBy: req.user?.id }
+        })
+        return successResponse(res, user, 'User Restored Successfully.')
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+module.exports = { createUser, createUserInEvent, getAllUsers, getUserById, updateUser, deleteUser, hardDeleteUser, restoreUser }

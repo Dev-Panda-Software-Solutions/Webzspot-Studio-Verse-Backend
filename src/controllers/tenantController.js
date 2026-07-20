@@ -37,9 +37,11 @@ const getAllTenants = async (req, res) => {
         const page = Math.max(1, parseInt(req.query.page) || 1)
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50))
         const skip = (page - 1) * limit
-        const where = { isactive: true }
+        // status: "active" (default) | "archived" | "all"
+        const status = req.query.status === "archived" ? false : req.query.status === "all" ? undefined : true
+        const where = status === undefined ? {} : { isactive: status }
         const [items, total] = await Promise.all([
-            prisma.tenant.findMany({ where, skip, take: limit }),
+            prisma.tenant.findMany({ where, skip, take: limit, orderBy: { createdAt: 'desc' } }),
             prisma.tenant.count({ where })
         ])
         return successResponse(res, { items, total, page, limit, pages: Math.ceil(total / limit) })
@@ -105,4 +107,16 @@ const hardDeleteTenant = async (req, res) => {
     }
 }
 
-module.exports = { createTenant, getAllTenants, getTenantById, updateTenant, deleteTenant, hardDeleteTenant }
+const restoreTenant = async (req, res) => {
+    try {
+        const tenant = await prisma.tenant.update({
+            where: { tenant_id: req.params.id },
+            data: { isactive: true, updatedBy: req.user?.id }
+        })
+        return successResponse(res, tenant, 'Studio Restored Successfully.')
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+module.exports = { createTenant, getAllTenants, getTenantById, updateTenant, deleteTenant, hardDeleteTenant, restoreTenant }

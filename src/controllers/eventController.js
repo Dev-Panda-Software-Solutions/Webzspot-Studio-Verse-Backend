@@ -144,6 +144,7 @@ const getAllEvents = async (req, res) => {
                     isactive: true,
                     access_expires: true,
                     favourite_limit: true,
+                    favourites_submitted_at: true,
                     createdAt: true,
                     event: true,
                 },
@@ -157,6 +158,7 @@ const getAllEvents = async (req, res) => {
                 event_user_id: m.event_user_id,
                 access_expires: m.access_expires,
                 favourite_limit: m.favourite_limit,
+                favourites_submitted_at: m.favourites_submitted_at,
                 has_current_access: !m.access_expires || new Date(m.access_expires) >= now,
             }
         }))

@@ -182,6 +182,10 @@ model EventUserMapping {
   access_expires  DateTime?
   // Max number of photos this client may favourite for this event. null = unlimited.
   favourite_limit Int?
+  // Set when the client (or the studio, on their behalf) submits their final
+  // favourite selection for this event. Once set, favourites are frozen —
+  // null = still editable.
+  favourites_submitted_at DateTime?
   createdBy       String
   createdAt       DateTime  @default(now())
   updatedBy       String?

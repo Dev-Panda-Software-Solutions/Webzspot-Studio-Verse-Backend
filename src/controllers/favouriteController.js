@@ -15,13 +15,16 @@ const addFavourite = async (req, res) => {
 
         // Check event access, media existence, and any prior favourite (active or not) in parallel
         const [eventAccess, media, existing] = await Promise.all([
-            prisma.eventUserMapping.findFirst({ where: { event_id, user_id, isactive: true }, select: { event_user_id: true, favourite_limit: true } }),
+            prisma.eventUserMapping.findFirst({ where: { event_id, user_id, isactive: true }, select: { event_user_id: true, favourite_limit: true, favourites_submitted_at: true } }),
             prisma.uploadedMedia.findFirst({ where: { media_id, event_id, isactive: true } }),
             prisma.userFavouriteMediaMapping.findFirst({ where: { event_id, user_id, media_id } })
         ])
 
         if (!eventAccess) return errorResponse(res, 'You do not have access to this event.', 403)
         if (!media) return errorResponse(res, 'Media not found in this event.', 404)
+        if (eventAccess.favourites_submitted_at) {
+            return errorResponse(res, 'Your favourites have been submitted and are locked. Contact your studio to make changes.', 403)
+        }
         if (existing?.isactive) return errorResponse(res, 'Already in favourites.', 400)
 
         if (eventAccess.favourite_limit != null) {
@@ -153,6 +156,14 @@ const removeFavourite = async (req, res) => {
             if (!targetUser || targetUser.created_by_tenant_id !== loginRecord?.tenant_id) {
                 return errorResponse(res, 'You can only remove favourites of users you created.', 403)
             }
+        }
+
+        const mapping = await prisma.eventUserMapping.findFirst({
+            where: { event_id: fav.event_id, user_id: fav.user_id },
+            select: { favourites_submitted_at: true }
+        })
+        if (mapping?.favourites_submitted_at) {
+            return errorResponse(res, 'These favourites have been submitted and are locked. Contact your studio to make changes.', 403)
         }
 
         await prisma.userFavouriteMediaMapping.update({

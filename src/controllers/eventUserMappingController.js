@@ -70,7 +70,7 @@ const assignUserToEvent = async (req, res) => {
 const updateEventUserMapping = async (req, res) => {
     try {
         const { id } = req.params
-        const { access_expires, isactive, favourite_limit } = req.body
+        const { access_expires, isactive, favourite_limit, favourites_submitted } = req.body
 
         const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: id }, select: { event_user_id: true, event_id: true } })
         if (!mapping) return errorResponse(res, 'Mapping not found.', 404)
@@ -96,16 +96,45 @@ const updateEventUserMapping = async (req, res) => {
             }
             updateData.favourite_limit = parsedLimit
         }
+        // Studio can trigger a submit on the client's behalf, or unlock a submitted
+        // selection back to editable (favourites_submitted: false clears it).
+        if (favourites_submitted !== undefined) {
+            updateData.favourites_submitted_at = favourites_submitted ? new Date() : null
+        }
 
         const updated = await prisma.eventUserMapping.update({
             where: { event_user_id: id },
             data: updateData,
             select: {
-                event_user_id: true, isactive: true, favourite_limit: true,
+                event_user_id: true, isactive: true, favourite_limit: true, favourites_submitted_at: true,
                 user: { select: { user_id: true, user_name: true, user_email_id: true } }
             }
         })
         return successResponse(res, updated, 'Access updated successfully.')
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+// Client submits their own favourite selection for this event — locks it against
+// further changes until the studio unlocks it (via updateEventUserMapping).
+const submitFavouritesForEvent = async (req, res) => {
+    try {
+        const { id } = req.params
+        const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+        if (!loginRecord?.user_id) return errorResponse(res, 'Only client accounts can submit favourites.', 403)
+
+        const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: id } })
+        if (!mapping) return errorResponse(res, 'Mapping not found.', 404)
+        if (mapping.user_id !== loginRecord.user_id) return errorResponse(res, 'You can only submit your own favourites.', 403)
+        if (!mapping.isactive) return errorResponse(res, 'You do not have access to this event.', 403)
+        if (mapping.favourites_submitted_at) return errorResponse(res, 'Favourites have already been submitted.', 400)
+
+        const updated = await prisma.eventUserMapping.update({
+            where: { event_user_id: id },
+            data: { favourites_submitted_at: new Date(), updatedBy: req.user?.id }
+        })
+        return successResponse(res, updated, 'Favourites Submitted Successfully.')
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -131,6 +160,7 @@ const getUsersByEvent = async (req, res) => {
                 isactive: true,
                 access_expires: true,
                 favourite_limit: true,
+                favourites_submitted_at: true,
                 createdAt: true,
                 user: { select: { user_id: true, user_name: true, user_email_id: true, user_phone_number: true, isactive: true } }
             },
@@ -197,6 +227,17 @@ const removeUserFromEvent = async (req, res) => {
 
 const hardDeleteUserFromEvent = async (req, res) => {
     try {
+        const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: req.params.id }, select: { event_user_id: true, event_id: true } })
+        if (!mapping) return errorResponse(res, 'User-Event mapping not found.', 404)
+
+        if (req.user.role === "ADMIN") {
+            const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+            const access = await prisma.eventTenantMapping.findFirst({
+                where: { event_id: mapping.event_id, tenant_id: loginRecord?.tenant_id, isactive: true }
+            })
+            if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+        }
+
         await prisma.eventUserMapping.delete({ where: { event_user_id: req.params.id } })
         return successResponse(res, null, 'User Mapping Permanently Deleted Successfully.')
     } catch (err) {
@@ -204,4 +245,4 @@ const hardDeleteUserFromEvent = async (req, res) => {
     }
 }
 
-module.exports = { assignUserToEvent, updateEventUserMapping, getUsersByEvent, getEventsByUser, removeUserFromEvent, hardDeleteUserFromEvent }
+module.exports = { assignUserToEvent, updateEventUserMapping, submitFavouritesForEvent, getUsersByEvent, getEventsByUser, removeUserFromEvent, hardDeleteUserFromEvent }

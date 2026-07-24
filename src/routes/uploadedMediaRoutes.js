@@ -12,6 +12,7 @@ const {
     getAllMediaByEvent,
     getMediaById,
     deleteMedia,
+    restoreMedia,
     hardDeleteMedia
 } = require("../controllers/uploadedMediaController")
 
@@ -29,6 +30,7 @@ router.post("/large/complete", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"),
 router.post("/large/abort", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), abortLargeUpload)
 router.get("/event/:event_id", verifyToken, getAllMediaByEvent)
 router.get("/:id", verifyToken, getMediaById)
+router.put("/:id/restore", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), restoreMedia)
 router.delete("/hard/:id", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), hardDeleteMedia)
 router.delete("/:id", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), deleteMedia)
 

@@ -385,7 +385,9 @@ const getAllMediaByEvent = async (req, res) => {
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
         }
 
-        const where = { event_id, isactive: true }
+        // status: "active" (default) | "archived" | "all" — clients (USER) always only see active media
+        const status = role === "USER" ? true : (req.query.status === "archived" ? false : req.query.status === "all" ? undefined : true)
+        const where = status === undefined ? { event_id } : { event_id, isactive: status }
         const [rawItems, total, allSizes] = await Promise.all([
             prisma.uploadedMedia.findMany({
                 where,
@@ -466,6 +468,30 @@ const deleteMedia = async (req, res) => {
     }
 }
 
+const restoreMedia = async (req, res) => {
+    try {
+        const media = await prisma.uploadedMedia.findUnique({ where: { media_id: req.params.id } })
+        if (!media) return errorResponse(res, 'Media Not Found.', 404)
+
+        if (req.user.role === "ADMIN") {
+            const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+            const access = await prisma.eventTenantMapping.findFirst({
+                where: { event_id: media.event_id, tenant_id: loginRecord?.tenant_id, isactive: true }
+            })
+            if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+        }
+
+        const restored = await prisma.uploadedMedia.update({
+            where: { media_id: req.params.id },
+            data: { isactive: true, updatedBy: req.user?.id },
+            select: SAFE_MEDIA_SELECT
+        })
+        return successResponse(res, restored, 'Media Restored Successfully.')
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
 const hardDeleteMedia = async (req, res) => {
     try {
         const media = await prisma.uploadedMedia.findUnique({ where: { media_id: req.params.id } })
@@ -506,5 +532,6 @@ module.exports = {
     getAllMediaByEvent,
     getMediaById,
     deleteMedia,
+    restoreMedia,
     hardDeleteMedia
 }

@@ -101,6 +101,9 @@ const subscribeToPlan = async (req, res) => {
 
         return successResponse(res, subscription, "Subscribed Successfully.", 201)
     } catch (err) {
+        // Guards against a double-click/concurrent-request race — the DB's partial
+        // unique index (one active subscription per tenant) rejected a second insert.
+        if (err.code === "P2002") return errorResponse(res, "Your plan was just updated. Please refresh and try again.", 409)
         return errorResponse(res, sanitizePrismaError(err))
     }
 }
@@ -174,6 +177,9 @@ const activateTrial = async (req, res) => {
         return successResponse(res, subscription, "Free Trial Activated Successfully.", 201)
     } catch (err) {
         if (err instanceof SubscriptionAccessError) return errorResponse(res, err.message, err.statusCode)
+        // Guards against a double-click/concurrent-request race — the DB's partial
+        // unique index (one active subscription per tenant) rejected a second insert.
+        if (err.code === "P2002") return errorResponse(res, "Your trial was just activated. Please refresh the page.", 409)
         return errorResponse(res, sanitizePrismaError(err))
     }
 }

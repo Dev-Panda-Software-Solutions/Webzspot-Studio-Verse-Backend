@@ -385,6 +385,12 @@ model SubscriptionPlan {
   @@index([display_order])
 }
 
+// NOTE: a partial unique index `TenantSubscription_one_active_per_tenant`
+// (tenant_id) WHERE isactive = true exists in the database (added via raw SQL
+// migration — Prisma's schema DSL can't express a WHERE clause on a unique
+// constraint). It guarantees a tenant can never have two active subscriptions
+// at once, even if a check-then-act race (double-click, retry) slips past
+// application-level guards. Do NOT let a future `prisma migrate diff` drop it.
 model TenantSubscription {
   tenant_subscription_id String                   @id @default(uuid())
   tenant_id              String

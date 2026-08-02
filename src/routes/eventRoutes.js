@@ -4,7 +4,7 @@ const { verifyToken } = require("../middleware/authMiddleware")
 const { requireRole } = require("../middleware/roleMiddleware")
 const { createEventValidator } = require("../validators/eventValidators")
 const { validate } = require("../middleware/validate")
-const { createEvent, getAllEvents, getEventById, updateEvent, deleteEvent, restoreEvent, hardDeleteEvent, getEventStats, getDashboardAnalytics } = require("../controllers/eventController")
+const { createEvent, getAllEvents, getEventById, updateEvent, publishEvent, deleteEvent, restoreEvent, hardDeleteEvent, getEventStats, getDashboardAnalytics } = require("../controllers/eventController")
 
 // Tenants create and manage events; users can only view
 router.get("/stats", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), getEventStats)
@@ -13,6 +13,7 @@ router.post("/", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), createEventVa
 router.get("/", verifyToken, getAllEvents)
 router.get("/:id", verifyToken, getEventById)
 router.put("/:id", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), updateEvent)
+router.put("/:id/publish", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), publishEvent)
 router.put("/:id/restore", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), restoreEvent)
 router.delete("/hard/:id", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), hardDeleteEvent)
 router.delete("/:id", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), deleteEvent)

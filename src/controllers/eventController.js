@@ -3,7 +3,7 @@ const fs = require("fs")
 const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { assertAiEventAllowed, getActiveSubscription, SubscriptionAccessError } = require("../utils/subscriptionAccess")
+const { getActiveSubscription } = require("../utils/subscriptionAccess")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
 
@@ -12,39 +12,35 @@ const createEvent = async (req, res) => {
         const {
             event_name, event_description, event_date, event_time, event_venue,
             event_organizer, event_organizer_phone_number, event_organizer_email_id,
-            profile_url, user_ids, is_ai_event
+            profile_url, user_ids
         } = req.body
 
         const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
 
-        // A studio with no photo quota left can't usefully create a new event —
-        // require at least 1 remaining photo, same threshold as an upload would need.
+        // Whether this event gets an AI Media module alongside Photo Selection
+        // is decided by the studio's current plan, not a per-event choice —
+        // "If the plan includes AI, the event also contains an AI Media module."
+        let is_ai_event = false
+
+        // There's no cap on the *number* of events a studio can create — but a
+        // new event is useless without any upload quota left, so it's still
+        // gated on the same conditions as an upload: an active plan, not in
+        // its grace period or expired, and quota not fully used up.
         if (loginRecord?.tenant_id) {
             const subscription = await getActiveSubscription(loginRecord.tenant_id)
             if (!subscription) {
                 return errorResponse(res, "No active plan. Activate your free trial or subscribe to a plan to create events.", 403)
             }
-            if (subscription.expires_at && new Date() > new Date(subscription.expires_at)) {
-                return errorResponse(res, "Your subscription has expired. Please renew or choose a new plan.", 403)
+            if (subscription.status === "GRACE") {
+                return errorResponse(res, "Your subscription's billing period has ended. Renew during the grace period to create new events.", 403)
+            }
+            if (subscription.status === "EXPIRED") {
+                return errorResponse(res, "Your subscription has expired. Subscribe to a plan to continue.", 403)
             }
             if (subscription.photo_quota_used >= subscription.photo_quota_total) {
                 return errorResponse(res, "Your photo upload quota is used up. Upgrade your plan to create new events.", 403)
             }
-        }
-
-        if (is_ai_event) {
-            // AI events are gated on wallet credits, available to a studio on ANY
-            // subscription plan — a tenant-less caller (e.g. SUPER_ADMIN) has no
-            // wallet to check against, so it can never create one.
-            if (!loginRecord?.tenant_id) {
-                return errorResponse(res, "AI events require wallet credits. Only studio accounts can create AI events.", 403)
-            }
-            try {
-                await assertAiEventAllowed(loginRecord.tenant_id)
-            } catch (accessErr) {
-                if (accessErr instanceof SubscriptionAccessError) return errorResponse(res, accessErr.message, accessErr.statusCode)
-                throw accessErr
-            }
+            is_ai_event = Boolean(subscription.plan?.includes_ai_media)
         }
 
         const event = await prisma.event.create({
@@ -53,7 +49,7 @@ const createEvent = async (req, res) => {
                 event_date: event_date ? new Date(event_date) : null,
                 event_time, event_venue, event_organizer,
                 event_organizer_phone_number, event_organizer_email_id,
-                profile_url, is_ai_event: Boolean(is_ai_event), createdBy: req.user?.id || "SYSTEM"
+                profile_url, is_ai_event, createdBy: req.user?.id || "SYSTEM"
             }
         })
 
@@ -256,6 +252,33 @@ const updateEvent = async (req, res) => {
             }
         })
         return successResponse(res, event, 'Event Updated Successfully.')
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+// Marks the event as published. For a non-AI event this simply flips the
+// switch — the client accounts the studio already created can access it
+// regardless. For an AI event, real face-matching + guest notification
+// emails are a later phase; for now this just records that the studio
+// considers uploads finished.
+const publishEvent = async (req, res) => {
+    try {
+        const { id: event_id } = req.params
+
+        if (req.user.role === "ADMIN") {
+            const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+            const access = await prisma.eventTenantMapping.findFirst({
+                where: { event_id, tenant_id: loginRecord?.tenant_id, collaboration_role: { in: ["OWNER", "EDITOR"] }, isactive: true }
+            })
+            if (!access) return errorResponse(res, 'Only the event OWNER or EDITOR can publish this event.', 403)
+        }
+
+        const event = await prisma.event.update({
+            where: { event_id },
+            data: { published_at: new Date(), updatedBy: req.user?.id }
+        })
+        return successResponse(res, event, 'Event Published Successfully.')
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -692,4 +715,4 @@ const getDashboardAnalytics = async (req, res) => {
     }
 }
 
-module.exports = { createEvent, getAllEvents, getEventById, updateEvent, deleteEvent, restoreEvent, hardDeleteEvent, getEventStats, getDashboardAnalytics }
+module.exports = { createEvent, getAllEvents, getEventById, updateEvent, publishEvent, deleteEvent, restoreEvent, hardDeleteEvent, getEventStats, getDashboardAnalytics }

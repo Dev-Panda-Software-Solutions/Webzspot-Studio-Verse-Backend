@@ -13,13 +13,19 @@ const getSettings = async (req, res) => {
 
 const updateSettings = async (req, res) => {
     try {
-        const { trial_duration_days, trial_photo_quota } = req.body
+        const { trial_duration_days, trial_photo_quota, monthly_grace_days, yearly_grace_days } = req.body
 
         if (trial_duration_days !== undefined && (!Number.isInteger(trial_duration_days) || trial_duration_days < 1)) {
             return errorResponse(res, "trial_duration_days must be a positive integer.", 400)
         }
         if (trial_photo_quota !== undefined && (!Number.isInteger(trial_photo_quota) || trial_photo_quota < 1)) {
             return errorResponse(res, "trial_photo_quota must be a positive integer.", 400)
+        }
+        if (monthly_grace_days !== undefined && (!Number.isInteger(monthly_grace_days) || monthly_grace_days < 1)) {
+            return errorResponse(res, "monthly_grace_days must be a positive integer.", 400)
+        }
+        if (yearly_grace_days !== undefined && (!Number.isInteger(yearly_grace_days) || yearly_grace_days < 1)) {
+            return errorResponse(res, "yearly_grace_days must be a positive integer.", 400)
         }
 
         const current = await getPlatformSettings()
@@ -28,6 +34,8 @@ const updateSettings = async (req, res) => {
             data: {
                 ...(trial_duration_days !== undefined ? { trial_duration_days } : {}),
                 ...(trial_photo_quota !== undefined ? { trial_photo_quota } : {}),
+                ...(monthly_grace_days !== undefined ? { monthly_grace_days } : {}),
+                ...(yearly_grace_days !== undefined ? { yearly_grace_days } : {}),
                 updatedBy: req.user?.id
             }
         })

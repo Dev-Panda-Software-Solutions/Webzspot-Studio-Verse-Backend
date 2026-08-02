@@ -140,6 +140,62 @@ const subscribeToPlan = async (req, res) => {
     }
 }
 
+// Upgrading (e.g. Basic Monthly -> Pro Monthly) is deliberately NOT the same
+// as subscribeToPlan — it keeps the current billing period and quota_used
+// exactly as they are, only raising the quota ceiling, and charges just the
+// price difference (mocked — no real payment gateway yet). subscribeToPlan
+// remains the renewal path (fresh period, quota reset to 0).
+const upgradePlan = async (req, res) => {
+    try {
+        const { subscription_plan_id } = req.body
+        if (!subscription_plan_id) return errorResponse(res, "subscription_plan_id is required.", 400)
+
+        const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+        if (!loginRecord?.tenant_id) return errorResponse(res, "Only studio accounts can upgrade a plan.", 403)
+        const tenant_id = loginRecord.tenant_id
+
+        const [current, targetPlan] = await Promise.all([
+            getActiveSubscription(tenant_id),
+            prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } })
+        ])
+        if (!current) return errorResponse(res, "No active subscription to upgrade.", 400)
+        if (["GRACE", "EXPIRED", "CANCELLED"].includes(current.status)) {
+            return errorResponse(res, "Your subscription isn't active. Renew (subscribe) instead of upgrading.", 400)
+        }
+        if (!targetPlan || !targetPlan.isactive) return errorResponse(res, "Plan not found.", 404)
+        if (targetPlan.plan_type !== "SUBSCRIPTION" || !current.plan || current.plan.plan_type !== "SUBSCRIPTION") {
+            return errorResponse(res, "Upgrades are only available between subscription plans.", 400)
+        }
+        if (targetPlan.duration_unit !== current.plan.duration_unit) {
+            return errorResponse(res, "You can only upgrade to a plan with the same billing interval (e.g. monthly to monthly, yearly to yearly).", 400)
+        }
+        if (targetPlan.subscription_plan_id === current.subscription_plan_id) {
+            return errorResponse(res, "You're already on this plan.", 400)
+        }
+
+        const currentPrice = current.locked_price != null ? Number(current.locked_price) : Number(current.plan.price)
+        const targetPrice = Number(targetPlan.price)
+        const amount_to_pay = Math.max(0, targetPrice - currentPrice)
+
+        const updated = await prisma.tenantSubscription.update({
+            where: { tenant_subscription_id: current.tenant_subscription_id },
+            data: {
+                subscription_plan_id: targetPlan.subscription_plan_id,
+                photo_quota_total: targetPlan.photo_quota,
+                is_price_locked: false,
+                locked_price: null,
+                updatedBy: req.user?.id
+            },
+            include: { plan: true }
+        })
+
+        return successResponse(res, { subscription: updated, amount_charged: amount_to_pay },
+            `Upgraded to ${targetPlan.plan_name}. ₹${amount_to_pay} charged (mock payment — quota and billing period unchanged).`)
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
 const rechargeWallet = async (req, res) => {
     try {
         const { subscription_plan_id } = req.body
@@ -216,4 +272,4 @@ const activateTrial = async (req, res) => {
     }
 }
 
-module.exports = { getMySubscription, getTenantSubscription, getMySubscriptionHistory, getTenantSubscriptionHistory, subscribeToPlan, rechargeWallet, activateTrial }
+module.exports = { getMySubscription, getTenantSubscription, getMySubscriptionHistory, getTenantSubscriptionHistory, subscribeToPlan, upgradePlan, rechargeWallet, activateTrial }

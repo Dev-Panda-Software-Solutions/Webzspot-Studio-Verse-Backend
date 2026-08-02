@@ -134,7 +134,12 @@ model Event {
   event_organizer_phone_number String?
   event_organizer_email_id     String?
   profile_url                  String?
+  // Snapshotted from the tenant's plan at creation time — an event either
+  // gets a Photo Selection + AI Media pair, or Photo Selection only.
   is_ai_event                  Boolean   @default(false)
+  // Set when the studio owner clicks "Publish Event". Informational for now —
+  // will gate the AI face-matching/email step once that's built.
+  published_at                 DateTime?
   isactive                     Boolean   @default(true)
   createdBy                    String
   createdAt                    DateTime  @default(now())
@@ -147,6 +152,7 @@ model Event {
   uploaded_media    UploadedMedia[]
   user_favourites   UserFavouriteMediaMapping[]
   tenant_favourites TenantFavouriteMediaMapping[]
+  guests            EventGuest[]
 }
 
 // ============================================
@@ -200,6 +206,29 @@ model EventUserMapping {
 }
 
 // ============================================
+// EVENT GUEST (AI Media QR self-registration)
+// ============================================
+// A guest scans the event's QR code, uploads a selfie, and leaves their
+// email. No login/account is created for them. Face-matching against
+// AI Media photos and the resulting notification email are a later phase —
+// this only captures the registration itself.
+model EventGuest {
+  event_guest_id     String   @id @default(uuid())
+  event_id           String
+  guest_email        String
+  selfie_server_path String
+  isactive           Boolean  @default(true)
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedBy          String?
+  updatedAt          DateTime @updatedAt
+
+  event Event @relation(fields: [event_id], references: [event_id])
+
+  @@index([event_id])
+}
+
+// ============================================
 // MEDIA UPLOAD STAGES
 // ============================================
 model MediaUploadStage {
@@ -234,26 +263,37 @@ model MediaUploadStage {
 // ============================================
 // UPLOADED MEDIA
 // ============================================
+enum MediaGalleryType {
+  PHOTO_SELECTION
+  AI_MEDIA
+}
+
 model UploadedMedia {
-  media_id               String   @id @default(uuid())
+  media_id               String           @id @default(uuid())
   event_id               String?
-  media_upload_stage_id  String?  @unique
+  media_upload_stage_id  String?          @unique
   media_name             String
   media_type             String
   media_size             String
   original_size          String?
   media_server_path      String
   compressed_server_path String
-  isactive               Boolean  @default(true)
+  // Photo Selection and AI Media are two separate galleries within the same
+  // event. A "copy" between them creates a second row pointing at the SAME
+  // stored file (see copyMediaToGallery) rather than duplicating storage.
+  gallery_type           MediaGalleryType @default(PHOTO_SELECTION)
+  isactive               Boolean          @default(true)
   createdBy              String
-  createdAt              DateTime @default(now())
+  createdAt              DateTime         @default(now())
   updatedBy              String?
-  updatedAt              DateTime @updatedAt
+  updatedAt              DateTime         @updatedAt
 
   event             Event?                        @relation(fields: [event_id], references: [event_id])
   upload_stages     MediaUploadStage?             @relation(fields: [media_upload_stage_id], references: [media_upload_stage_id])
   favourites        UserFavouriteMediaMapping[]
   tenant_favourites TenantFavouriteMediaMapping[]
+
+  @@index([event_id, gallery_type])
 }
 
 // ============================================
@@ -343,6 +383,9 @@ enum DurationUnit {
 enum TenantSubscriptionStatus {
   TRIAL
   ACTIVE
+  // Billing period ended but the renewal grace window hasn't lapsed yet —
+  // uploads are blocked, existing photos/events stay visible.
+  GRACE
   EXPIRED
   CANCELLED
 }
@@ -372,6 +415,10 @@ model SubscriptionPlan {
   wallet_credits             Int?
   wallet_tier                WalletTier?
   ai_credit_cost_per_photo   Int?
+  // A SUBSCRIPTION plan either includes the AI Media feature (guest QR
+  // registration + a second gallery, matching handled in a later phase) or
+  // is Photo Selection only. Irrelevant for WALLET plans.
+  includes_ai_media          Boolean       @default(false)
   special_access_cutoff_date DateTime?
   display_order              Int           @default(0)
   isactive                   Boolean       @default(true)
@@ -402,6 +449,10 @@ model TenantSubscription {
   photo_quota_used       Int                      @default(0)
   starts_at              DateTime                 @default(now())
   expires_at             DateTime?
+  // Set once the billing period lapses without renewal (status flips to
+  // GRACE) — when this passes too, the tenant's data is purged and status
+  // becomes EXPIRED. Null while ACTIVE/TRIAL or for plans with no expiry.
+  grace_ends_at          DateTime?
   isactive               Boolean                  @default(true)
   createdBy              String
   createdAt              DateTime                 @default(now())
@@ -449,13 +500,17 @@ model WalletTransaction {
 
 // Singleton row — platform-wide values a Super Admin can tune without a deploy.
 model PlatformSettings {
-  platform_settings_id String   @id @default(uuid())
-  trial_duration_days  Int      @default(7)
-  trial_photo_quota    Int      @default(200)
-  createdBy            String
-  createdAt            DateTime @default(now())
-  updatedBy            String?
-  updatedAt            DateTime @updatedAt
+  platform_settings_id  String   @id @default(uuid())
+  trial_duration_days   Int      @default(7)
+  trial_photo_quota     Int      @default(200)
+  // Grace window after a subscription's billing period ends, before its
+  // events/photos are permanently purged for non-renewal.
+  monthly_grace_days    Int      @default(3)
+  yearly_grace_days     Int      @default(12)
+  createdBy             String
+  createdAt             DateTime @default(now())
+  updatedBy             String?
+  updatedAt             DateTime @updatedAt
 }
 
 // ============================================

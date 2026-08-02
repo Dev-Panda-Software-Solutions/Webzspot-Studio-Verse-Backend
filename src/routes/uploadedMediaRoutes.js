@@ -7,6 +7,7 @@ const {
     uploadMedia,
     initiateLargeUpload,
     uploadLargePart,
+    copyMediaToGallery,
     completeLargeUpload,
     abortLargeUpload,
     getAllMediaByEvent,
@@ -31,6 +32,7 @@ router.post("/large/abort", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), ab
 router.get("/event/:event_id", verifyToken, getAllMediaByEvent)
 router.get("/:id", verifyToken, getMediaById)
 router.put("/:id/restore", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), restoreMedia)
+router.post("/:id/copy", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), copyMediaToGallery)
 router.delete("/hard/:id", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), hardDeleteMedia)
 router.delete("/:id", verifyToken, requireRole("SUPER_ADMIN", "ADMIN"), deleteMedia)
 

@@ -5,11 +5,12 @@ const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { withMediaUrls, withMediaUrl } = require("../utils/mediaUrl")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { assertQuotaAvailable, consumeQuota, deductAiCredits, SubscriptionAccessError } = require("../utils/subscriptionAccess")
+const { assertQuotaAvailable, consumeQuota, SubscriptionAccessError } = require("../utils/subscriptionAccess")
 
 const MAX_LARGE_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ALLOWED_EXTS = new Set([".jpeg", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi", ".mkv", ".mp3", ".wav"])
+const GALLERY_TYPES = new Set(["PHOTO_SELECTION", "AI_MEDIA"])
 
 const SAFE_MEDIA_SELECT = {
     media_id: true,
@@ -19,12 +20,19 @@ const SAFE_MEDIA_SELECT = {
     media_type: true,
     media_size: true,
     original_size: true,
+    gallery_type: true,
     isactive: true,
     createdAt: true,
     updatedAt: true
 }
 
 const formatKb = (bytes) => `${((Number(bytes) || 0) / 1024).toFixed(2)} KB`
+// AI Media only exists on events whose plan includes it — uploading straight
+// into that gallery on a non-AI event would create content nothing can reach.
+const resolveGalleryType = (raw, isAiEvent) => {
+    const requested = GALLERY_TYPES.has(raw) ? raw : "PHOTO_SELECTION"
+    return requested === "AI_MEDIA" && !isAiEvent ? "PHOTO_SELECTION" : requested
+}
 
 const assertCanUploadToEvent = async (req, event_id) => {
     if (!event_id || !UUID_REGEX.test(event_id)) return 'Invalid or missing event_id.'
@@ -66,11 +74,11 @@ const uploadMedia = async (req, res) => {
         }
 
         const tenant_id = loginRecord.tenant_id
+        const eventForUpload = await prisma.event.findUnique({ where: { event_id }, select: { is_ai_event: true } })
+        const gallery_type = resolveGalleryType(req.body.gallery_type, eventForUpload?.is_ai_event)
         if (tenant_id) {
             try {
                 await assertQuotaAvailable(tenant_id)
-                const event = await prisma.event.findUnique({ where: { event_id }, select: { is_ai_event: true } })
-                if (event?.is_ai_event) await deductAiCredits(tenant_id, 1, event_id)
             } catch (accessErr) {
                 if (accessErr instanceof SubscriptionAccessError) return errorResponse(res, accessErr.message, accessErr.statusCode)
                 throw accessErr
@@ -165,6 +173,7 @@ const uploadMedia = async (req, res) => {
                 original_size: originalSizeKb,
                 media_server_path: mediaServerPath,
                 compressed_server_path: compressedServerPath,
+                gallery_type,
                 createdBy: req.user?.id || "SYSTEM"
             },
             select: SAFE_MEDIA_SELECT
@@ -274,7 +283,7 @@ const uploadLargePart = async (req, res) => {
 
 const completeLargeUpload = async (req, res) => {
     try {
-        const { event_id, stage_id, key, upload_id, file_name, file_type, file_size, parts } = req.body
+        const { event_id, stage_id, key, upload_id, file_name, file_type, file_size, parts, gallery_type: requestedGalleryType } = req.body
         const accessError = await assertCanUploadToEvent(req, event_id)
         if (accessError) return errorResponse(res, accessError, accessError === 'Unauthorized.' ? 401 : 403)
         if (!stage_id || !key || !upload_id || !Array.isArray(parts) || parts.length === 0) {
@@ -287,11 +296,11 @@ const completeLargeUpload = async (req, res) => {
         if (size > MAX_LARGE_UPLOAD_BYTES) return errorResponse(res, 'File too large. Maximum allowed is 5GB per file.', 413)
 
         const tenant_id = req.loginRecord?.tenant_id
+        const eventForUpload = await prisma.event.findUnique({ where: { event_id }, select: { is_ai_event: true } })
+        const gallery_type = resolveGalleryType(requestedGalleryType, eventForUpload?.is_ai_event)
         if (tenant_id) {
             try {
                 await assertQuotaAvailable(tenant_id)
-                const event = await prisma.event.findUnique({ where: { event_id }, select: { is_ai_event: true } })
-                if (event?.is_ai_event) await deductAiCredits(tenant_id, 1, event_id)
             } catch (accessErr) {
                 if (accessErr instanceof SubscriptionAccessError) return errorResponse(res, accessErr.message, accessErr.statusCode)
                 throw accessErr
@@ -310,6 +319,7 @@ const completeLargeUpload = async (req, res) => {
                 original_size: sizeLabel,
                 media_server_path: mediaServerPath,
                 compressed_server_path: mediaServerPath,
+                gallery_type,
                 createdBy: req.user?.id || "SYSTEM"
             },
             select: SAFE_MEDIA_SELECT
@@ -387,7 +397,10 @@ const getAllMediaByEvent = async (req, res) => {
 
         // status: "active" (default) | "archived" | "all" — clients (USER) always only see active media
         const status = role === "USER" ? true : (req.query.status === "archived" ? false : req.query.status === "all" ? undefined : true)
-        const where = status === undefined ? { event_id } : { event_id, isactive: status }
+        // gallery: "PHOTO_SELECTION" (default) | "AI_MEDIA" | "all" — clients only ever see Photo Selection
+        const galleryFilter = role === "USER" ? "PHOTO_SELECTION" : req.query.gallery
+        const galleryWhere = galleryFilter && GALLERY_TYPES.has(galleryFilter) ? { gallery_type: galleryFilter } : {}
+        const where = { event_id, ...galleryWhere, ...(status === undefined ? {} : { isactive: status }) }
         const [rawItems, total, allSizes] = await Promise.all([
             prisma.uploadedMedia.findMany({
                 where,
@@ -505,15 +518,28 @@ const hardDeleteMedia = async (req, res) => {
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
         }
 
-        if (s3Storage.isS3Path(media.compressed_server_path) && media.compressed_server_path !== media.media_server_path) {
-            await s3Storage.deleteObject(media.compressed_server_path)
-        } else if (media.compressed_server_path && media.compressed_server_path !== media.media_server_path && fs.existsSync(media.compressed_server_path)) {
-            fs.unlinkSync(media.compressed_server_path)
-        }
-        if (s3Storage.isS3Path(media.media_server_path)) {
-            await s3Storage.deleteObject(media.media_server_path)
-        } else if (media.media_server_path && fs.existsSync(media.media_server_path)) {
-            fs.unlinkSync(media.media_server_path)
+        // Copying a photo between Photo Selection and AI Media creates a second
+        // row pointing at the SAME stored file (see copyMediaToGallery) — never
+        // delete the underlying object while another row still references it.
+        const sharedCopy = await prisma.uploadedMedia.findFirst({
+            where: {
+                media_id: { not: media.media_id },
+                OR: [{ media_server_path: media.media_server_path }, { compressed_server_path: media.compressed_server_path }]
+            },
+            select: { media_id: true }
+        })
+
+        if (!sharedCopy) {
+            if (s3Storage.isS3Path(media.compressed_server_path) && media.compressed_server_path !== media.media_server_path) {
+                await s3Storage.deleteObject(media.compressed_server_path)
+            } else if (media.compressed_server_path && media.compressed_server_path !== media.media_server_path && fs.existsSync(media.compressed_server_path)) {
+                fs.unlinkSync(media.compressed_server_path)
+            }
+            if (s3Storage.isS3Path(media.media_server_path)) {
+                await s3Storage.deleteObject(media.media_server_path)
+            } else if (media.media_server_path && fs.existsSync(media.media_server_path)) {
+                fs.unlinkSync(media.media_server_path)
+            }
         }
 
         await prisma.uploadedMedia.delete({ where: { media_id: req.params.id } })
@@ -523,10 +549,61 @@ const hardDeleteMedia = async (req, res) => {
     }
 }
 
+// Copies a photo into the event's other gallery (Photo Selection <-> AI
+// Media). No new file is uploaded/stored — the new row just points at the
+// same S3 object, so storage and quota are untouched by copying.
+const copyMediaToGallery = async (req, res) => {
+    try {
+        const media = await prisma.uploadedMedia.findUnique({ where: { media_id: req.params.id } })
+        if (!media) return errorResponse(res, 'Media Not Found.', 404)
+
+        const target = req.body.target_gallery
+        if (!GALLERY_TYPES.has(target)) return errorResponse(res, 'target_gallery must be PHOTO_SELECTION or AI_MEDIA.', 400)
+        if (target === media.gallery_type) return errorResponse(res, 'That photo is already in this gallery.', 400)
+
+        if (req.user.role === "ADMIN") {
+            const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+            const access = await prisma.eventTenantMapping.findFirst({
+                where: { event_id: media.event_id, tenant_id: loginRecord?.tenant_id, isactive: true }
+            })
+            if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+        }
+
+        if (target === "AI_MEDIA") {
+            const event = await prisma.event.findUnique({ where: { event_id: media.event_id }, select: { is_ai_event: true } })
+            if (!event?.is_ai_event) return errorResponse(res, 'This event has no AI Media gallery.', 400)
+        }
+
+        const alreadyCopied = await prisma.uploadedMedia.findFirst({
+            where: { event_id: media.event_id, gallery_type: target, media_server_path: media.media_server_path }
+        })
+        if (alreadyCopied) return errorResponse(res, 'Already Copied.', 409)
+
+        const copy = await prisma.uploadedMedia.create({
+            data: {
+                event_id: media.event_id,
+                media_name: media.media_name,
+                media_type: media.media_type,
+                media_size: media.media_size,
+                original_size: media.original_size,
+                media_server_path: media.media_server_path,
+                compressed_server_path: media.compressed_server_path,
+                gallery_type: target,
+                createdBy: req.user?.id || "SYSTEM"
+            },
+            select: SAFE_MEDIA_SELECT
+        })
+        return successResponse(res, copy, `Copied to ${target === 'AI_MEDIA' ? 'AI Media' : 'Photo Selection'}.`, 201)
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
 module.exports = {
     uploadMedia,
     initiateLargeUpload,
     uploadLargePart,
+    copyMediaToGallery,
     completeLargeUpload,
     abortLargeUpload,
     getAllMediaByEvent,

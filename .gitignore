@@ -14,11 +14,13 @@ uploads/covers/*
 uploads/events/*
 uploads/profiles/*
 uploads/watermarks/*
+uploads/guests/*
 # Keep empty folder structure in repo
 !uploads/covers/.gitkeep
 !uploads/events/.gitkeep
 !uploads/profiles/.gitkeep
 !uploads/watermarks/.gitkeep
+!uploads/guests/.gitkeep
 
 # ── Logs ─────────────────────────────────────────────────────
 *.log

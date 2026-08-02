@@ -93,6 +93,48 @@ const createUserInEvent = async (req, res) => {
     }
 }
 
+// Powers the "New Client" duplicate-warning prompt — nothing else in the
+// schema stops two clients sharing a name (only username/email are unique),
+// so a studio can silently end up with two separate accounts for the same
+// person. Checked on submit, not enforced server-side, so the studio can
+// still deliberately create a genuine second client with the same name.
+const checkDuplicateClient = async (req, res) => {
+    try {
+        const { name, phone, email } = req.query
+        const orConditions = []
+        if (name?.trim()) orConditions.push({ user_name: { equals: name.trim(), mode: "insensitive" } })
+        if (phone?.trim()) orConditions.push({ user_phone_number: phone.trim() })
+        if (email?.trim()) orConditions.push({ user_email_id: { equals: email.trim(), mode: "insensitive" } })
+        if (orConditions.length === 0) return successResponse(res, [])
+
+        let created_by_tenant_id
+        if (req.user.role !== "SUPER_ADMIN") {
+            const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+            created_by_tenant_id = loginRecord?.tenant_id
+        }
+
+        const matches = await prisma.user.findMany({
+            where: {
+                isactive: true,
+                ...(created_by_tenant_id ? { created_by_tenant_id } : {}),
+                OR: orConditions
+            },
+            include: {
+                event_mapping: { where: { isactive: true }, select: { event: { select: { event_name: true } } }, take: 3 }
+            },
+            take: 10
+        })
+
+        const items = matches.map(({ event_mapping, ...u }) => ({
+            ...u,
+            event_names: event_mapping.map(m => m.event?.event_name).filter(Boolean)
+        }))
+        return successResponse(res, items)
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
 const getAllUsers = async (req, res) => {
     try {
         const { role, id: loginId } = req.user
@@ -240,4 +282,4 @@ const restoreUser = async (req, res) => {
     }
 }
 
-module.exports = { createUser, createUserInEvent, getAllUsers, getUserById, updateUser, deleteUser, hardDeleteUser, restoreUser }
+module.exports = { createUser, createUserInEvent, checkDuplicateClient, getAllUsers, getUserById, updateUser, deleteUser, hardDeleteUser, restoreUser }

@@ -457,3 +457,51 @@ model PlatformSettings {
   updatedBy            String?
   updatedAt            DateTime @updatedAt
 }
+
+// ============================================
+// HELP & SUPPORT
+// ============================================
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+// `createdBy` (the audit-quartet convention used everywhere else in this
+// schema) doubles as the ownership key here — it's the raiser's Login.transid,
+// so "my tickets" is just `where: { createdBy: req.user.id }`. No separate
+// tenant scoping: any authenticated role (SUPER_ADMIN/ADMIN/USER) can raise
+// one, and only Super Admin manages/replies to the queue.
+model SupportTicket {
+  support_ticket_id String              @id @default(uuid())
+  subject            String
+  description        String
+  status             SupportTicketStatus @default(OPEN)
+  raised_by_role     Role
+  raised_by_name     String
+  isactive           Boolean             @default(true)
+  createdBy          String
+  createdAt          DateTime            @default(now())
+  updatedBy          String?
+  updatedAt          DateTime            @updatedAt
+
+  replies SupportTicketReply[]
+
+  @@index([createdBy])
+  @@index([status])
+}
+
+model SupportTicketReply {
+  support_ticket_reply_id String   @id @default(uuid())
+  support_ticket_id       String
+  message                 String
+  responder_role          Role
+  responder_name          String
+  createdBy               String
+  createdAt               DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [support_ticket_id], references: [support_ticket_id])
+
+  @@index([support_ticket_id])
+}

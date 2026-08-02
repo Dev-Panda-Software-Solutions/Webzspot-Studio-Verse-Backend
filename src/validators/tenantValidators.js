@@ -7,7 +7,9 @@ const createTenantValidator = [
     body("tenant_studio_name").trim().notEmpty().withMessage("Studio name is required."),
     body("tenant_studio_address").trim().notEmpty().withMessage("Studio address is required."),
     body("username").trim().isLength({ min: 4 }).withMessage("Username must be at least 4 characters."),
-    body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 characters.")
+    // Optional — the super admin's Create Studio form no longer collects a
+    // password; the controller mints one when it's omitted.
+    body("password").optional({ checkFalsy: true }).isLength({ min: 6 }).withMessage("Password must be at least 6 characters.")
 ]
 
 module.exports = { createTenantValidator }

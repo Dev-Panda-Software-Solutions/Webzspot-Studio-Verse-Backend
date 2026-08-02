@@ -186,15 +186,20 @@ const getEventsByUser = async (req, res) => {
             }
         }
 
+        // Includes revoked mappings too (isactive: false) — the studio's client
+        // management view needs to show and restore those, not just active ones.
         const mappings = await prisma.eventUserMapping.findMany({
-            where: { user_id, isactive: true },
+            where: { user_id },
             select: {
                 event_user_id: true,
                 event_id: true,
                 isactive: true,
+                access_expires: true,
+                favourites_submitted_at: true,
                 createdAt: true,
                 event: true,
-            }
+            },
+            orderBy: { createdAt: 'desc' }
         })
         return successResponse(res, mappings)
     } catch (err) {

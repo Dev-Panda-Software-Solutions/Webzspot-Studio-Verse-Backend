@@ -1,6 +1,6 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { getActiveSubscription, activateTrial: activateTrialForTenant, SubscriptionAccessError } = require("../utils/subscriptionAccess")
+const { getActiveSubscription, getEffectiveStatus, activateTrial: activateTrialForTenant, SubscriptionAccessError } = require("../utils/subscriptionAccess")
 
 const computeExpiry = (plan, from = new Date()) => {
     if (plan.plan_type === "WALLET") return null
@@ -17,7 +17,10 @@ const buildSubscriptionSummary = async (tenant_id) => {
         prisma.tenantWallet.findUnique({ where: { tenant_id } }),
         prisma.tenant.findUnique({ where: { tenant_id }, select: { trial_activated_at: true } })
     ])
-    return { subscription, wallet, trial_activated_at: tenant?.trial_activated_at || null }
+    // Surface the real-time status (e.g. EXPIRED once expires_at has passed)
+    // rather than the raw DB column, which only updates on the next write.
+    const effectiveSubscription = subscription ? { ...subscription, status: getEffectiveStatus(subscription) } : null
+    return { subscription: effectiveSubscription, wallet, trial_activated_at: tenant?.trial_activated_at || null }
 }
 
 const formatDate = (date) => new Date(date).toISOString().slice(0, 10)
@@ -45,6 +48,35 @@ const getTenantSubscription = async (req, res) => {
     try {
         const summary = await buildSubscriptionSummary(req.params.tenant_id)
         return successResponse(res, summary)
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+// Every subscription/trial a tenant has ever had (active or superseded) —
+// "Purchased Plans History", not just the one that's currently active.
+const buildSubscriptionHistory = async (tenant_id) => {
+    const history = await prisma.tenantSubscription.findMany({
+        where: { tenant_id },
+        include: { plan: true },
+        orderBy: { starts_at: "desc" }
+    })
+    return history.map(s => ({ ...s, status: getEffectiveStatus(s) }))
+}
+
+const getMySubscriptionHistory = async (req, res) => {
+    try {
+        const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+        if (!loginRecord?.tenant_id) return errorResponse(res, "Only studio accounts have a subscription history.", 403)
+        return successResponse(res, await buildSubscriptionHistory(loginRecord.tenant_id))
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+const getTenantSubscriptionHistory = async (req, res) => {
+    try {
+        return successResponse(res, await buildSubscriptionHistory(req.params.tenant_id))
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -184,4 +216,4 @@ const activateTrial = async (req, res) => {
     }
 }
 
-module.exports = { getMySubscription, getTenantSubscription, subscribeToPlan, rechargeWallet, activateTrial }
+module.exports = { getMySubscription, getTenantSubscription, getMySubscriptionHistory, getTenantSubscriptionHistory, subscribeToPlan, rechargeWallet, activateTrial }

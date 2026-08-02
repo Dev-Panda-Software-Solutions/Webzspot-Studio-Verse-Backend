@@ -119,7 +119,12 @@ const getAllEvents = async (req, res) => {
 
         if (role === "ADMIN") {
             const loginRecord = await prisma.login.findUnique({ where: { transid: loginId } })
-            const where = { tenant_id: loginRecord?.tenant_id, isactive: true, event: { isactive: true } }
+            // status: "active" (default) | "archived" | "all" — archiving an event
+            // (see deleteEvent) also deactivates the studio's own ownership mapping
+            // row, so filtering has to happen on the event itself, not the mapping.
+            const status = req.query.status === "archived" ? false : req.query.status === "all" ? undefined : true
+            const eventFilter = status === undefined ? {} : { isactive: status }
+            const where = { tenant_id: loginRecord?.tenant_id, event: eventFilter }
             const [mappings, total] = await Promise.all([
                 prisma.eventTenantMapping.findMany({ where, include: { event: true }, skip, take: limit, orderBy: { createdAt: 'desc' } }),
                 prisma.eventTenantMapping.count({ where })
@@ -278,6 +283,36 @@ const deleteEvent = async (req, res) => {
             prisma.userFavouriteMediaMapping.updateMany({ where: { event_id }, data: { isactive: false, updatedBy } }),
         ])
         return successResponse(res, null, 'Event and all related records deleted successfully.')
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+// Reverses deleteEvent (archive) exactly — reactivates the event, the studio's
+// ownership mapping, every client's access, and every photo/video in it. This
+// is what actually un-hides the event for clients again, not just a status flip.
+const restoreEvent = async (req, res) => {
+    try {
+        const { id: event_id } = req.params
+
+        if (req.user.role === "ADMIN") {
+            const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+            const access = await prisma.eventTenantMapping.findFirst({
+                where: { event_id, tenant_id: loginRecord?.tenant_id, collaboration_role: "OWNER" }
+            })
+            if (!access) return errorResponse(res, 'Only the event OWNER can restore this event.', 403)
+        }
+
+        const updatedBy = req.user?.id
+        await prisma.$transaction([
+            prisma.event.update({ where: { event_id }, data: { isactive: true, updatedBy } }),
+            prisma.eventTenantMapping.updateMany({ where: { event_id }, data: { isactive: true, updatedBy } }),
+            prisma.eventUserMapping.updateMany({ where: { event_id }, data: { isactive: true, updatedBy } }),
+            prisma.uploadedMedia.updateMany({ where: { event_id }, data: { isactive: true, updatedBy } }),
+            prisma.mediaUploadStage.updateMany({ where: { event_id }, data: { isactive: true, updatedBy } }),
+            prisma.userFavouriteMediaMapping.updateMany({ where: { event_id }, data: { isactive: true, updatedBy } }),
+        ])
+        return successResponse(res, null, 'Event Restored Successfully.')
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -657,4 +692,4 @@ const getDashboardAnalytics = async (req, res) => {
     }
 }
 
-module.exports = { createEvent, getAllEvents, getEventById, updateEvent, deleteEvent, hardDeleteEvent, getEventStats, getDashboardAnalytics }
+module.exports = { createEvent, getAllEvents, getEventById, updateEvent, deleteEvent, restoreEvent, hardDeleteEvent, getEventStats, getDashboardAnalytics }

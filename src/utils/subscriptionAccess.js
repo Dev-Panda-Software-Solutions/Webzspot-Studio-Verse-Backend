@@ -40,6 +40,18 @@ const getActiveSubscription = async (tenant_id) => {
     })
 }
 
+// The stored `status` column only ever transitions on a write (subscribe,
+// recharge, cancel) — nothing flips it to EXPIRED when time simply passes, so
+// a subscription can sit at status "ACTIVE"/"TRIAL" in the DB long after its
+// expires_at has gone by. Callers that display status to a user (Dashboard,
+// Billing page, studio list) must use this instead of the raw column.
+const getEffectiveStatus = (subscription) => {
+    if (!subscription) return null
+    if (subscription.status === "CANCELLED") return "CANCELLED"
+    if (subscription.expires_at && new Date() > new Date(subscription.expires_at)) return "EXPIRED"
+    return subscription.status
+}
+
 // The free trial is opt-in (see activateTrial below) — a tenant with no
 // active subscription is a normal, expected state until they activate their
 // trial or subscribe to a plan, so no auto-provisioning happens here.
@@ -156,6 +168,7 @@ module.exports = {
     getPlatformSettings,
     trialExpiryDate,
     getActiveSubscription,
+    getEffectiveStatus,
     activateTrial,
     assertQuotaAvailable,
     consumeQuota,

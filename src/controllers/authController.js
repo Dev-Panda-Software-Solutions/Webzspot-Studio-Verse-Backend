@@ -158,8 +158,21 @@ const tenantSignup = async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(password, 10)
 
+        // tenant_name / tenant_studio_address were removed from the signup form —
+        // default owner name to the studio name so tenant_name stays populated.
+        const tenantData = {
+            tenant_name: (tenant_name || '').trim() || tenant_studio_name,
+            tenant_phone_number,
+            tenant_email_id,
+            tenant_studio_name,
+            tenant_studio_address: (tenant_studio_address || '').trim(),
+            profile_url,
+            role: "ADMIN",
+            createdBy: "SELF_SIGNUP"
+        }
+
         const tenant = await prisma.tenant.create({
-            data: { tenant_name, tenant_phone_number, tenant_email_id, tenant_studio_name, tenant_studio_address, profile_url, role: "ADMIN", createdBy: "SELF_SIGNUP" }
+            data: tenantData
         })
 
         const loginRecord = await prisma.login.create({

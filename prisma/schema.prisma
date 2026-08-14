@@ -140,6 +140,8 @@ model Event {
   // Set when the studio owner clicks "Publish Event". Informational for now —
   // will gate the AI face-matching/email step once that's built.
   published_at                 DateTime?
+  // Studio opt-in per event: whether clients may download their photos.
+  allow_download               Boolean   @default(true)
   isactive                     Boolean   @default(true)
   createdBy                    String
   createdAt                    DateTime  @default(now())
@@ -325,6 +327,9 @@ model TenantSettings {
   tenant_settings_id    String   @id @default(uuid())
   tenant_id             String?  @unique
   tenant_watermark_path String?
+  // Brand colours — applied to the client-facing gallery (accent/gold theme)
+  primary_color         String?
+  secondary_color       String?
   isactive              Boolean  @default(true)
   createdBy             String
   createdAt             DateTime @default(now())
@@ -443,8 +448,16 @@ model TenantSubscription {
   tenant_id              String
   subscription_plan_id   String?
   status                 TenantSubscriptionStatus
+  // What created this row — SUBSCRIBE | UPGRADE | DOWNGRADE | TRIAL | FREE_GRANT
+  // (super admin free access). Lets the plan history show up/down grades
+  // explicitly. Null on rows created before this column existed.
+  change_type            String?
   locked_price           Decimal?                 @db.Decimal(10, 2)
   is_price_locked        Boolean                  @default(false)
+  // Super Admin free grant: a chosen plan handed out free until a custom
+  // expiry (e.g. 6 or 12 months) — locked_price is 0 and this flag lets the
+  // UI tag it and lets revoke target exactly the grant row.
+  is_free_grant          Boolean                  @default(false)
   photo_quota_total      Int
   photo_quota_used       Int                      @default(0)
   starts_at              DateTime                 @default(now())

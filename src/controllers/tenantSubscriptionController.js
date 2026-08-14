@@ -120,6 +120,7 @@ const subscribeToPlan = async (req, res) => {
                     tenant_id,
                     subscription_plan_id: plan.subscription_plan_id,
                     status: "ACTIVE",
+                    change_type: "SUBSCRIBE",
                     locked_price: plan.price,
                     is_price_locked: true,
                     photo_quota_total: plan.photo_quota,
@@ -145,6 +146,56 @@ const subscribeToPlan = async (req, res) => {
 // exactly as they are, only raising the quota ceiling, and charges just the
 // price difference (mocked — no real payment gateway yet). subscribeToPlan
 // remains the renewal path (fresh period, quota reset to 0).
+// Both upgrade and downgrade log a NEW history row (old plan -> CANCELLED,
+// new plan -> ACTIVE carrying the same period + used quota) so the payment
+// history shows every plan up/down grade.
+const assertPlanSwapAllowed = async (tenant_id, subscription_plan_id) => {
+    const current = await getActiveSubscription(tenant_id)
+    if (!current) return { error: "No active subscription to change.", code: 400 }
+    if (["GRACE", "EXPIRED", "CANCELLED"].includes(current.status)) {
+        return { error: "Your subscription isn't active. Renew (subscribe) instead of upgrading or downgrading.", code: 400 }
+    }
+    const targetPlan = await prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } })
+    if (!targetPlan || !targetPlan.isactive) return { error: "Plan not found.", code: 404 }
+    if (targetPlan.plan_type !== "SUBSCRIPTION" || !current.plan || current.plan.plan_type !== "SUBSCRIPTION") {
+        return { error: "Plan changes are only available between subscription plans.", code: 400 }
+    }
+    if (targetPlan.duration_unit !== current.plan.duration_unit) {
+        return { error: "You can only change to a plan with the same billing interval (e.g. monthly to monthly, yearly to yearly).", code: 400 }
+    }
+    if (targetPlan.subscription_plan_id === current.subscription_plan_id) {
+        return { error: "You're already on this plan.", code: 400 }
+    }
+    return { current, targetPlan }
+}
+
+// Preserves billing period + quota used: cancels the old row and creates the
+// new one in one transaction so history records the change.
+const swapActivePlan = async (current, targetPlan, changeType, userId, extra = {}) => {
+    return prisma.$transaction([
+        prisma.tenantSubscription.update({
+            where: { tenant_subscription_id: current.tenant_subscription_id },
+            data: { isactive: false, status: "CANCELLED", updatedBy: userId }
+        }),
+        prisma.tenantSubscription.create({
+            data: {
+                tenant_id: current.tenant_id,
+                subscription_plan_id: targetPlan.subscription_plan_id,
+                status: "ACTIVE",
+                change_type: changeType,
+                locked_price: null,
+                is_price_locked: false,
+                photo_quota_total: targetPlan.photo_quota,
+                photo_quota_used: current.photo_quota_used,
+                starts_at: current.starts_at,
+                expires_at: current.expires_at,
+                createdBy: userId || "SYSTEM",
+                ...extra
+            }
+        })
+    ])
+}
+
 const upgradePlan = async (req, res) => {
     try {
         const { subscription_plan_id } = req.body
@@ -154,44 +205,56 @@ const upgradePlan = async (req, res) => {
         if (!loginRecord?.tenant_id) return errorResponse(res, "Only studio accounts can upgrade a plan.", 403)
         const tenant_id = loginRecord.tenant_id
 
-        const [current, targetPlan] = await Promise.all([
-            getActiveSubscription(tenant_id),
-            prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } })
-        ])
-        if (!current) return errorResponse(res, "No active subscription to upgrade.", 400)
-        if (["GRACE", "EXPIRED", "CANCELLED"].includes(current.status)) {
-            return errorResponse(res, "Your subscription isn't active. Renew (subscribe) instead of upgrading.", 400)
-        }
-        if (!targetPlan || !targetPlan.isactive) return errorResponse(res, "Plan not found.", 404)
-        if (targetPlan.plan_type !== "SUBSCRIPTION" || !current.plan || current.plan.plan_type !== "SUBSCRIPTION") {
-            return errorResponse(res, "Upgrades are only available between subscription plans.", 400)
-        }
-        if (targetPlan.duration_unit !== current.plan.duration_unit) {
-            return errorResponse(res, "You can only upgrade to a plan with the same billing interval (e.g. monthly to monthly, yearly to yearly).", 400)
-        }
-        if (targetPlan.subscription_plan_id === current.subscription_plan_id) {
-            return errorResponse(res, "You're already on this plan.", 400)
-        }
+        const { current, targetPlan, error } = await assertPlanSwapAllowed(tenant_id, subscription_plan_id)
+        if (error) return errorResponse(res, error, 400)
+        if (!current || !targetPlan) return errorResponse(res, "Plan not found.", 404)
 
         const currentPrice = current.locked_price != null ? Number(current.locked_price) : Number(current.plan.price)
         const targetPrice = Number(targetPlan.price)
-        const amount_to_pay = Math.max(0, targetPrice - currentPrice)
+        if (targetPrice <= currentPrice) {
+            return errorResponse(res, "This is not an upgrade — the target plan isn't priced higher. Use the downgrade flow instead.", 400)
+        }
+        const amount_to_pay = targetPrice - currentPrice
 
-        const updated = await prisma.tenantSubscription.update({
-            where: { tenant_subscription_id: current.tenant_subscription_id },
-            data: {
-                subscription_plan_id: targetPlan.subscription_plan_id,
-                photo_quota_total: targetPlan.photo_quota,
-                is_price_locked: false,
-                locked_price: null,
-                updatedBy: req.user?.id
-            },
-            include: { plan: true }
-        })
+        const [, subscription] = await swapActivePlan(current, targetPlan, "UPGRADE", req.user?.id)
 
-        return successResponse(res, { subscription: updated, amount_charged: amount_to_pay },
+        return successResponse(res, { subscription, amount_charged: amount_to_pay },
             `Upgraded to ${targetPlan.plan_name}. ₹${amount_to_pay} charged (mock payment — quota and billing period unchanged).`)
     } catch (err) {
+        if (err.code === "P2002") return errorResponse(res, "Your plan was just changed. Please refresh and try again.", 409)
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+// Downgrade keeps the current billing period and used quota too, but the
+// studio pays nothing — and there is NO refund of the difference. The
+// confirmation warning lives on the frontend; this endpoint just enforces the
+// no-refund rule and logs the change in the plan history.
+const downgradePlan = async (req, res) => {
+    try {
+        const { subscription_plan_id } = req.body
+        if (!subscription_plan_id) return errorResponse(res, "subscription_plan_id is required.", 400)
+
+        const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
+        if (!loginRecord?.tenant_id) return errorResponse(res, "Only studio accounts can downgrade a plan.", 403)
+        const tenant_id = loginRecord.tenant_id
+
+        const { current, targetPlan, error } = await assertPlanSwapAllowed(tenant_id, subscription_plan_id)
+        if (error) return errorResponse(res, error, 400)
+        if (!current || !targetPlan) return errorResponse(res, "Plan not found.", 404)
+
+        const currentPrice = current.locked_price != null ? Number(current.locked_price) : Number(current.plan.price)
+        const targetPrice = Number(targetPlan.price)
+        if (targetPrice >= currentPrice) {
+            return errorResponse(res, "This is not a downgrade — the target plan isn't priced lower. Use the upgrade flow instead.", 400)
+        }
+
+        const [, subscription] = await swapActivePlan(current, targetPlan, "DOWNGRADE", req.user?.id)
+
+        return successResponse(res, { subscription },
+            `Downgraded to ${targetPlan.plan_name}. No money will be refunded — the difference is forfeited.`)
+    } catch (err) {
+        if (err.code === "P2002") return errorResponse(res, "Your plan was just changed. Please refresh and try again.", 409)
         return errorResponse(res, sanitizePrismaError(err))
     }
 }
@@ -272,4 +335,4 @@ const activateTrial = async (req, res) => {
     }
 }
 
-module.exports = { getMySubscription, getTenantSubscription, getMySubscriptionHistory, getTenantSubscriptionHistory, subscribeToPlan, upgradePlan, rechargeWallet, activateTrial }
+module.exports = { getMySubscription, getTenantSubscription, getMySubscriptionHistory, getTenantSubscriptionHistory, subscribeToPlan, upgradePlan, downgradePlan, rechargeWallet, activateTrial }

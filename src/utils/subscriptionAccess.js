@@ -178,6 +178,7 @@ const activateTrial = async (tenant_id) => {
                 tenant_id,
                 subscription_plan_id: null,
                 status: "TRIAL",
+                change_type: "TRIAL",
                 photo_quota_total: settings.trial_photo_quota,
                 photo_quota_used: 0,
                 starts_at: now,

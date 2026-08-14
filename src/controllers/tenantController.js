@@ -18,7 +18,7 @@ const generateTempPassword = () => {
 
 const createTenant = async (req, res) => {
     try {
-        const { tenant_name, tenant_phone_number, tenant_email_id, tenant_studio_name, tenant_studio_address, profile_url, username, password } = req.body
+        const { tenant_name, tenant_phone_number, tenant_email_id, tenant_studio_name, tenant_studio_address, profile_url, username, password, free_access_plan_id, free_access_until } = req.body
 
         const [existingLogin, existingTenant] = await Promise.all([
             prisma.login.findFirst({ where: { username } }),
@@ -30,6 +30,25 @@ const createTenant = async (req, res) => {
         const plainPassword = password || generateTempPassword()
         const hashedPassword = await bcrypt.hash(plainPassword, 10)
 
+        // Optional Super Admin free grant: an existing plan handed out free
+        // until a custom expiry (e.g. 6 or 12 months). A grant and an expiry
+        // always travel together — a studio can never be created with an
+        // expiry alone. When granted, the auto-trial below is skipped.
+        let grantPlan = null
+        let grantUntil = null
+        if (free_access_plan_id || free_access_until) {
+            if (!free_access_plan_id || !free_access_until) {
+                return errorResponse(res, 'Free access requires both a plan and an expiry date.', 400)
+            }
+            grantPlan = await prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id: free_access_plan_id } })
+            if (!grantPlan || !grantPlan.isactive) return errorResponse(res, 'Free access plan not found.', 404)
+            if (grantPlan.plan_type !== "SUBSCRIPTION") return errorResponse(res, 'Only subscription plans can be granted for free.', 400)
+            grantUntil = new Date(free_access_until)
+            if (isNaN(grantUntil.getTime()) || grantUntil <= new Date()) {
+                return errorResponse(res, 'Free access must end in the future.', 400)
+            }
+        }
+
         const tenant = await prisma.tenant.create({
             data: { tenant_name, tenant_phone_number, tenant_email_id, tenant_studio_name, tenant_studio_address, profile_url, role: "ADMIN", createdBy: req.user?.id || "SYSTEM" }
         })
@@ -39,10 +58,31 @@ const createTenant = async (req, res) => {
             prisma.tenantSettings.create({ data: { tenant_id: tenant.tenant_id, createdBy: req.user?.id || "SYSTEM" } })
         ])
 
-        // Free trial is auto-granted on creation — no manual activation step.
-        await activateTrial(tenant.tenant_id).catch(err => {
-            console.error("[CreateTenant] Trial auto-activation failed:", err.message)
-        })
+        if (grantPlan && grantUntil) {
+            // Free grant replaces the auto-trial — plan free until the custom
+            // expiry, recorded as a real subscription so quota/history work.
+            await prisma.tenantSubscription.create({
+                data: {
+                    tenant_id: tenant.tenant_id,
+                    subscription_plan_id: grantPlan.subscription_plan_id,
+                    status: "ACTIVE",
+                    change_type: "FREE_GRANT",
+                    locked_price: 0,
+                    is_price_locked: false,
+                    is_free_grant: true,
+                    photo_quota_total: grantPlan.photo_quota,
+                    photo_quota_used: 0,
+                    starts_at: new Date(),
+                    expires_at: grantUntil,
+                    createdBy: req.user?.id || "SYSTEM"
+                }
+            })
+        } else {
+            // Free trial is auto-granted on creation — no manual activation step.
+            await activateTrial(tenant.tenant_id).catch(err => {
+                console.error("[CreateTenant] Trial auto-activation failed:", err.message)
+            })
+        }
 
         // Only surface the generated password when we made one up — never
         // echo back a password the caller explicitly supplied.
@@ -91,16 +131,103 @@ const getAllTenants = async (req, res) => {
 // Users + events belonging to a studio — powers the Super Admin "studio
 // detail" drill-down (Events page: click a studio to see how many clients
 // and events it has, not just a flat list of every event on the platform).
+// Also reports uploads still sitting in a staging state (never finalized)
+// and the studio's total media files.
 const getTenantSummary = async (req, res) => {
     try {
         const tenant_id = req.params.id
-        const [tenant, userCount, eventCount] = await Promise.all([
+        const [tenant, userCount, eventCount, mappings] = await Promise.all([
             prisma.tenant.findUnique({ where: { tenant_id } }),
             prisma.user.count({ where: { created_by_tenant_id: tenant_id, isactive: true } }),
-            prisma.eventTenantMapping.count({ where: { tenant_id, isactive: true } })
+            prisma.eventTenantMapping.count({ where: { tenant_id, isactive: true } }),
+            prisma.eventTenantMapping.findMany({ where: { tenant_id, isactive: true }, select: { event_id: true } })
         ])
         if (!tenant) return errorResponse(res, 'Tenant Not Found.', 404)
-        return successResponse(res, { tenant, user_count: userCount, event_count: eventCount })
+
+        const eventIds = mappings.map(m => m.event_id)
+        const [pendingUploads, mediaCount] = eventIds.length > 0
+            ? await Promise.all([
+                  // Staged uploads that never became real media (no UploadedMedia linked).
+                  prisma.mediaUploadStage.count({ where: { event_id: { in: eventIds }, isactive: true, uploaded_media: { is: null } } }),
+                  prisma.uploadedMedia.count({ where: { event_id: { in: eventIds }, isactive: true } })
+              ])
+            : [0, 0]
+
+        return successResponse(res, {
+            tenant,
+            user_count: userCount,
+            event_count: eventCount,
+            pending_uploads_count: pendingUploads,
+            media_count: mediaCount
+        })
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+// Super Admin grants a studio a chosen existing plan FOR FREE until a custom
+// expiry date (e.g. 6 or 12 months). Implemented as a real subscription row
+// (locked_price 0, is_free_grant true) so quota tracking, billing history and
+// the studio's own Billing page all see it naturally. A grant and an expiry
+// always travel together — never an expiry alone.
+const grantFreeAccess = async (req, res) => {
+    try {
+        const { subscription_plan_id, expires_at } = req.body
+        if (!subscription_plan_id || !expires_at) {
+            return errorResponse(res, "Free access requires both a plan (subscription_plan_id) and an expiry date (expires_at).", 400)
+        }
+
+        const plan = await prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } })
+        if (!plan || !plan.isactive) return errorResponse(res, "Plan not found.", 404)
+        if (plan.plan_type !== "SUBSCRIPTION") return errorResponse(res, "Only subscription plans can be granted for free.", 400)
+
+        const until = new Date(expires_at)
+        if (isNaN(until.getTime()) || until <= new Date()) {
+            return errorResponse(res, "Free access must end in the future.", 400)
+        }
+
+        const now = new Date()
+        const [, subscription] = await prisma.$transaction([
+            // Any active trial/plan is superseded by the grant.
+            prisma.tenantSubscription.updateMany({
+                where: { tenant_id: req.params.id, isactive: true },
+                data: { isactive: false, status: "CANCELLED", updatedBy: req.user?.id }
+            }),
+            prisma.tenantSubscription.create({
+                data: {
+                    tenant_id: req.params.id,
+                    subscription_plan_id: plan.subscription_plan_id,
+                    status: "ACTIVE",
+                    change_type: "FREE_GRANT",
+                    locked_price: 0,
+                    is_price_locked: false,
+                    is_free_grant: true,
+                    photo_quota_total: plan.photo_quota,
+                    photo_quota_used: 0,
+                    starts_at: now,
+                    expires_at: until,
+                    createdBy: req.user?.id || "SYSTEM"
+                }
+            })
+        ])
+
+        return successResponse(res, { subscription, plan },
+            `Free access granted — ${plan.plan_name} free until ${until.toISOString().slice(0, 10)}.`)
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+// Revoke an active free grant — the studio's grant row is cancelled and it
+// falls back to no plan (uploading requires a plan/trial again).
+const revokeFreeAccess = async (req, res) => {
+    try {
+        const result = await prisma.tenantSubscription.updateMany({
+            where: { tenant_id: req.params.id, isactive: true, is_free_grant: true },
+            data: { isactive: false, status: "CANCELLED", updatedBy: req.user?.id }
+        })
+        if (result.count === 0) return errorResponse(res, "No active free access grant found.", 404)
+        return successResponse(res, null, "Free access revoked.")
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -143,6 +270,62 @@ const deleteTenantStorage = async (req, res) => {
         ])
 
         return successResponse(res, { deleted_count: mediaItems.length }, `Deleted ${mediaItems.length} file${mediaItems.length === 1 ? '' : 's'}.`)
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+// Super Admin reassigns a studio's plan — replaces whatever the studio is
+// currently on (trial, free grant, or another plan) with a fresh subscription
+// to the chosen plan. Used photo quota carries over so nothing uploaded is
+// lost; the billing period restarts from now.
+const computePlanExpiry = (plan, from = new Date()) => {
+    const expiry = new Date(from)
+    if (plan.duration_unit === "DAYS") expiry.setDate(expiry.getDate() + plan.duration_value)
+    else if (plan.duration_unit === "MONTHS") expiry.setMonth(expiry.getMonth() + plan.duration_value)
+    else if (plan.duration_unit === "YEARS") expiry.setFullYear(expiry.getFullYear() + plan.duration_value)
+    return expiry
+}
+
+const setTenantPlan = async (req, res) => {
+    try {
+        const { subscription_plan_id } = req.body
+        if (!subscription_plan_id) return errorResponse(res, "subscription_plan_id is required.", 400)
+
+        const plan = await prisma.subscriptionPlan.findUnique({ where: { subscription_plan_id } })
+        if (!plan || !plan.isactive) return errorResponse(res, "Plan not found.", 404)
+        if (plan.plan_type !== "SUBSCRIPTION") return errorResponse(res, "Only subscription plans can be assigned.", 400)
+
+        const current = await prisma.tenantSubscription.findFirst({
+            where: { tenant_id: req.params.id, isactive: true },
+            orderBy: { starts_at: "desc" }
+        })
+
+        const now = new Date()
+        const [, subscription] = await prisma.$transaction([
+            prisma.tenantSubscription.updateMany({
+                where: { tenant_id: req.params.id, isactive: true },
+                data: { isactive: false, status: "CANCELLED", updatedBy: req.user?.id }
+            }),
+            prisma.tenantSubscription.create({
+                data: {
+                    tenant_id: req.params.id,
+                    subscription_plan_id: plan.subscription_plan_id,
+                    status: "ACTIVE",
+                    change_type: "ADMIN_SET",
+                    locked_price: null,
+                    is_price_locked: false,
+                    photo_quota_total: plan.photo_quota,
+                    photo_quota_used: current?.photo_quota_used ?? 0,
+                    starts_at: now,
+                    expires_at: computePlanExpiry(plan, now),
+                    createdBy: req.user?.id || "SYSTEM"
+                }
+            })
+        ])
+
+        return successResponse(res, { subscription, plan },
+            `Plan set to ${plan.plan_name} for this studio.`)
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -231,4 +414,4 @@ const restoreTenant = async (req, res) => {
     }
 }
 
-module.exports = { createTenant, getAllTenants, getTenantById, getTenantSummary, updateTenant, deleteTenant, hardDeleteTenant, restoreTenant, deleteTenantStorage }
+module.exports = { createTenant, getAllTenants, getTenantById, getTenantSummary, grantFreeAccess, revokeFreeAccess, setTenantPlan, updateTenant, deleteTenant, hardDeleteTenant, restoreTenant, deleteTenantStorage }

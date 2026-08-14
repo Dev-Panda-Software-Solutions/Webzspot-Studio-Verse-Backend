@@ -100,11 +100,12 @@ const createUserInEvent = async (req, res) => {
 // still deliberately create a genuine second client with the same name.
 const checkDuplicateClient = async (req, res) => {
     try {
-        const { name, phone, email } = req.query
+        const { name, phone, email, username } = req.query
         const orConditions = []
         if (name?.trim()) orConditions.push({ user_name: { equals: name.trim(), mode: "insensitive" } })
         if (phone?.trim()) orConditions.push({ user_phone_number: phone.trim() })
         if (email?.trim()) orConditions.push({ user_email_id: { equals: email.trim(), mode: "insensitive" } })
+        if (username?.trim()) orConditions.push({ login: { username: { equals: username.trim(), mode: "insensitive" } } })
         if (orConditions.length === 0) return successResponse(res, [])
 
         let created_by_tenant_id
@@ -149,6 +150,9 @@ const getAllUsers = async (req, res) => {
         if (role !== "SUPER_ADMIN") {
             const loginRecord = await prisma.login.findUnique({ where: { transid: loginId } })
             where.created_by_tenant_id = loginRecord?.tenant_id
+        } else if (req.query.created_by_tenant_id) {
+            // SUPER_ADMIN drill-down: restrict to one studio's clients.
+            where.created_by_tenant_id = req.query.created_by_tenant_id
         }
 
         const [rawItems, total] = await Promise.all([

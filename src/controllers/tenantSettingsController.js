@@ -40,9 +40,13 @@ const getTenantSettings = async (req, res) => {
         const settings = await prisma.tenantSettings.findUnique({ where: { tenant_id: req.params.tenant_id } })
         if (!settings) return errorResponse(res, 'Tenant Settings Not Found.', 404)
 
-        // USER role: only expose watermark path — not internal config fields
+        // USER role: only expose the client-facing settings (watermark + brand colours)
         if (req.user.role === "USER") {
-            return successResponse(res, { tenant_watermark_path: settings.tenant_watermark_path })
+            return successResponse(res, {
+                tenant_watermark_path: settings.tenant_watermark_path,
+                primary_color: settings.primary_color,
+                secondary_color: settings.secondary_color,
+            })
         }
 
         return successResponse(res, settings)
@@ -58,10 +62,22 @@ const updateTenantSettings = async (req, res) => {
             if (!isOwner) return errorResponse(res, 'You can only update your own settings.', 403)
         }
 
-        const { tenant_watermark_path } = req.body
-        const settings = await prisma.tenantSettings.update({
+        const { tenant_watermark_path, primary_color, secondary_color } = req.body
+        const settings = await prisma.tenantSettings.upsert({
             where: { tenant_id: req.params.tenant_id },
-            data: { tenant_watermark_path, updatedBy: req.user?.id }
+            update: {
+                ...(tenant_watermark_path !== undefined ? { tenant_watermark_path } : {}),
+                ...(primary_color !== undefined ? { primary_color } : {}),
+                ...(secondary_color !== undefined ? { secondary_color } : {}),
+                updatedBy: req.user?.id
+            },
+            create: {
+                tenant_id: req.params.tenant_id,
+                tenant_watermark_path,
+                primary_color,
+                secondary_color,
+                createdBy: req.user?.id || "SYSTEM"
+            }
         })
         return successResponse(res, settings, 'Tenant Settings Updated Successfully.')
     } catch (err) {

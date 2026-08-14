@@ -335,12 +335,30 @@ const downloadUserFavouritesAsZip = async (req, res) => {
 
         const loginRecord = await prisma.login.findUnique({ where: { transid: loginId } })
         if (!loginRecord) return errorResponse(res, 'Unauthorized.', 401)
-        if (!loginRecord.tenant_id) return errorResponse(res, 'Only tenants can download favourites zip.', 403)
 
-        const tenantAccess = await prisma.eventTenantMapping.findFirst({
-            where: { event_id, tenant_id: loginRecord.tenant_id, isactive: true }
-        })
-        if (!tenantAccess) return errorResponse(res, 'You do not have access to this event.', 403)
+        if (loginRecord.role === "USER") {
+            // The event still has to explicitly allow downloads for the end user
+            const [mapping, event] = await Promise.all([
+                prisma.eventUserMapping.findFirst({
+                    where: { event_id, user_id: loginRecord.user_id, isactive: true },
+                    select: { event_user_id: true, access_expires: true }
+                }),
+                prisma.event.findUnique({ where: { event_id }, select: { allow_download: true, isactive: true } })
+            ])
+            if (!mapping) return errorResponse(res, 'You do not have access to this event.', 403)
+            if (mapping.access_expires && new Date(mapping.access_expires) < new Date()) {
+                return errorResponse(res, 'Your access to this event has expired.', 403)
+            }
+            if (!event?.isactive) return errorResponse(res, 'Event is not available.', 403)
+            if (!event?.allow_download) return errorResponse(res, 'Downloads are disabled for this event by the studio.', 403)
+            if (loginRecord.user_id !== user_id) return errorResponse(res, 'You can only download your own favourites.', 403)
+        } else {
+            if (!loginRecord.tenant_id) return errorResponse(res, 'Only tenants can download favourites zip.', 403)
+            const tenantAccess = await prisma.eventTenantMapping.findFirst({
+                where: { event_id, tenant_id: loginRecord.tenant_id, isactive: true }
+            })
+            if (!tenantAccess) return errorResponse(res, 'You do not have access to this event.', 403)
+        }
 
         const [favourites, eventRecord, userRecord] = await Promise.all([
             prisma.userFavouriteMediaMapping.findMany({

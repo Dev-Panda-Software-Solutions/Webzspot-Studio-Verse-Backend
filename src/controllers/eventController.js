@@ -12,7 +12,7 @@ const createEvent = async (req, res) => {
         const {
             event_name, event_description, event_date, event_time, event_venue,
             event_organizer, event_organizer_phone_number, event_organizer_email_id,
-            profile_url, user_ids
+            profile_url, user_ids, allow_download
         } = req.body
 
         const loginRecord = await prisma.login.findUnique({ where: { transid: req.user?.id } })
@@ -49,7 +49,9 @@ const createEvent = async (req, res) => {
                 event_date: event_date ? new Date(event_date) : null,
                 event_time, event_venue, event_organizer,
                 event_organizer_phone_number, event_organizer_email_id,
-                profile_url, is_ai_event, createdBy: req.user?.id || "SYSTEM"
+                profile_url, is_ai_event,
+                allow_download: allow_download === undefined ? true : Boolean(allow_download),
+                createdBy: req.user?.id || "SYSTEM"
             }
         })
 
@@ -91,7 +93,12 @@ const getAllEvents = async (req, res) => {
         const skip = (page - 1) * limit
 
         if (role === "SUPER_ADMIN") {
-            const where = { isactive: true }
+            // Optional tenant_id filter — drill into one studio's events
+            // (used by the super admin studio detail popup).
+            const tenantFilter = req.query.tenant_id
+                ? { tenant_mapping: { some: { tenant_id: req.query.tenant_id, collaboration_role: 'OWNER', isactive: true } } }
+                : {}
+            const where = { isactive: true, ...tenantFilter }
             const [rawItems, total] = await Promise.all([
                 prisma.event.findMany({
                     where, skip, take: limit, orderBy: { createdAt: 'desc' },
@@ -240,7 +247,7 @@ const updateEvent = async (req, res) => {
             if (!access) return errorResponse(res, 'Only the event OWNER or EDITOR can update this event.', 403)
         }
 
-        const { event_name, event_description, event_date, event_time, event_venue, event_organizer, event_organizer_phone_number, event_organizer_email_id, profile_url } = req.body
+        const { event_name, event_description, event_date, event_time, event_venue, event_organizer, event_organizer_phone_number, event_organizer_email_id, profile_url, allow_download } = req.body
         const event = await prisma.event.update({
             where: { event_id },
             data: {
@@ -248,7 +255,9 @@ const updateEvent = async (req, res) => {
                 event_date: event_date ? new Date(event_date) : undefined,
                 event_time, event_venue, event_organizer,
                 event_organizer_phone_number, event_organizer_email_id,
-                profile_url, updatedBy: req.user?.id
+                profile_url,
+                allow_download: allow_download === undefined ? undefined : Boolean(allow_download),
+                updatedBy: req.user?.id
             }
         })
         return successResponse(res, event, 'Event Updated Successfully.')

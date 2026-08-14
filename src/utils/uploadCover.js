@@ -28,6 +28,8 @@ const fileFilter = (req, file, cb) => {
     }
 }
 
-const uploadCover = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } })
+// No small-file restriction — the frontend crops/compresses the cover after
+// picking it, so accept high-res originals from modern cameras.
+const uploadCover = multer({ storage, fileFilter, limits: { fileSize: 25 * 1024 * 1024 } })
 
 module.exports = uploadCover

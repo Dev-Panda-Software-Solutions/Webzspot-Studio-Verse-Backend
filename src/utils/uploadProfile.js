@@ -35,6 +35,8 @@ const fileFilter = (req, file, cb) => {
     }
 }
 
-const uploadProfile = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } })
+// No small-file restriction — profile images are compressed after upload,
+// so a high-resolution original is accepted (same limit as media files).
+const uploadProfile = multer({ storage, fileFilter, limits: { fileSize: 500 * 1024 * 1024 } })
 
 module.exports = uploadProfile

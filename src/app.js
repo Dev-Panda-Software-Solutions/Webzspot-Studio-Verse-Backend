@@ -137,7 +137,7 @@ app.use((err, req, res, next) => {
         }
     })
     if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(413).json({ success: false, message: "File too large. Maximum allowed is 500MB for media and 5MB for profile images.", data: null })
+        return res.status(413).json({ success: false, message: "File too large. Maximum allowed is 500MB for media and 25MB for cover/watermark images.", data: null })
     }
     if (err.message && (err.message.includes("File type not allowed") || err.message.includes("Only image files"))) {
         return res.status(415).json({ success: false, message: err.message, data: null })

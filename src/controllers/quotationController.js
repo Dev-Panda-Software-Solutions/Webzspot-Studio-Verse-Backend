@@ -1,12 +1,7 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { resolveTenantId, claimNextNumber } = require("../utils/billingAccess")
+const { resolveTenantId, claimNextNumber, computeItemsTotal } = require("../utils/billingAccess")
 const { streamQuotationPdf } = require("../utils/billingPdf")
-
-// Sum of (price - discount_per_unit) * quantity across all line items —
-// the subtotal before the whole-quotation discount applied at Confirm.
-const computeItemsTotal = (items) =>
-    items.reduce((sum, i) => sum + (Number(i.price) - Number(i.discount_per_unit || 0)) * i.quantity, 0)
 
 const normalizeItems = (items) => {
     if (!Array.isArray(items)) return []

@@ -60,6 +60,27 @@ const createPayment = async (req, res) => {
     }
 }
 
+// Tenant-wide payment feed — powers the Invoicing dashboard's revenue chart
+// and recent-activity list (as opposed to getPaymentsForBill, which is
+// scoped to one bill's receipt history).
+const getAllPayments = async (req, res) => {
+    try {
+        const tenant_id = await resolveTenantId(req)
+        if (!tenant_id) return errorResponse(res, "Only studio accounts can view payments.", 403)
+
+        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50))
+        const payments = await prisma.payment.findMany({
+            where: { tenant_id, isactive: true },
+            take: limit,
+            orderBy: { createdAt: "desc" },
+            include: { bill: { select: { bill_number: true, billing_client: { select: { name: true } } } } }
+        })
+        return successResponse(res, payments)
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
 const getPaymentsForBill = async (req, res) => {
     try {
         const tenant_id = await resolveTenantId(req)
@@ -123,4 +144,4 @@ const downloadReceiptPdf = async (req, res) => {
     }
 }
 
-module.exports = { createPayment, getPaymentsForBill, getPaymentById, downloadReceiptPdf }
+module.exports = { createPayment, getAllPayments, getPaymentsForBill, getPaymentById, downloadReceiptPdf }

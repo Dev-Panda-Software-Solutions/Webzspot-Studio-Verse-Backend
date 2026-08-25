@@ -72,7 +72,7 @@ const getAllQuotations = async (req, res) => {
         const [rawItems, total] = await Promise.all([
             prisma.quotation.findMany({
                 where, skip, take: limit, orderBy: { quotation_number: "desc" },
-                include: { items: true, billing_client: true }
+                include: { items: true, billing_client: true, bill: { select: { bill_id: true, bill_number: true } } }
             }),
             prisma.quotation.count({ where })
         ])
@@ -89,7 +89,7 @@ const getQuotationById = async (req, res) => {
         const tenant_id = await resolveTenantId(req)
         const quotation = await prisma.quotation.findUnique({
             where: { quotation_id: req.params.id },
-            include: { items: { orderBy: { createdAt: "asc" } }, billing_client: true }
+            include: { items: { orderBy: { createdAt: "asc" } }, billing_client: true, bill: { select: { bill_id: true, bill_number: true } } }
         })
         if (!quotation || quotation.tenant_id !== tenant_id) return errorResponse(res, "Quotation Not Found.", 404)
         return successResponse(res, withTotals(quotation))
@@ -105,6 +105,7 @@ const updateQuotation = async (req, res) => {
         const tenant_id = await resolveTenantId(req)
         const existing = await prisma.quotation.findUnique({ where: { quotation_id: req.params.id } })
         if (!existing || existing.tenant_id !== tenant_id) return errorResponse(res, "Quotation Not Found.", 404)
+        if (existing.status === "CONFIRMED") return errorResponse(res, "This quotation has already been confirmed into a bill and can no longer be edited.", 409)
 
         const { items, discount_amount } = req.body
         const normalizedItems = items !== undefined ? normalizeItems(items) : undefined
@@ -135,6 +136,7 @@ const deleteQuotation = async (req, res) => {
         const tenant_id = await resolveTenantId(req)
         const existing = await prisma.quotation.findUnique({ where: { quotation_id: req.params.id } })
         if (!existing || existing.tenant_id !== tenant_id) return errorResponse(res, "Quotation Not Found.", 404)
+        if (existing.status === "CONFIRMED") return errorResponse(res, "This quotation has already been confirmed into a bill and can no longer be deleted.", 409)
 
         await prisma.quotation.update({
             where: { quotation_id: req.params.id },

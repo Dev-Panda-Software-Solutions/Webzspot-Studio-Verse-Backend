@@ -1,9 +1,6 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { resolveTenantId, claimNextNumber } = require("../utils/billingAccess")
-
-const computeItemsTotal = (items) =>
-    items.reduce((sum, i) => sum + (Number(i.price) - Number(i.discount_per_unit || 0)) * i.quantity, 0)
+const { resolveTenantId, claimNextNumber, computeItemsTotal } = require("../utils/billingAccess")
 
 const normalizeItems = (items) => {
     if (!Array.isArray(items)) return []
@@ -21,7 +18,9 @@ const withTotals = (bill) => {
     const items_total = computeItemsTotal(bill.items || [])
     const discount_amount = Number(bill.discount_amount || 0)
     const payable_amount = Math.max(0, items_total - discount_amount)
-    return { ...bill, items_total, payable_amount }
+    const paid_amount = (bill.payments || []).reduce((sum, p) => sum + Number(p.amount), 0)
+    const balance_due = Math.max(0, payable_amount - paid_amount)
+    return { ...bill, items_total, payable_amount, paid_amount, balance_due }
 }
 
 // Confirming a Quotation is the only way a Bill comes into existence — its
@@ -87,7 +86,7 @@ const getAllBills = async (req, res) => {
         const [rawItems, total] = await Promise.all([
             prisma.bill.findMany({
                 where, skip, take: limit, orderBy: { bill_number: "desc" },
-                include: { items: true, billing_client: true, quotation: { select: { quotation_number: true } } }
+                include: { items: true, billing_client: true, quotation: { select: { quotation_number: true } }, payments: { where: { isactive: true } } }
             }),
             prisma.bill.count({ where })
         ])
@@ -104,7 +103,12 @@ const getBillById = async (req, res) => {
         const tenant_id = await resolveTenantId(req)
         const bill = await prisma.bill.findUnique({
             where: { bill_id: req.params.id },
-            include: { items: { orderBy: { createdAt: "asc" } }, billing_client: true, quotation: { select: { quotation_number: true } } }
+            include: {
+                items: { orderBy: { createdAt: "asc" } },
+                billing_client: true,
+                quotation: { select: { quotation_number: true } },
+                payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
+            }
         })
         if (!bill || bill.tenant_id !== tenant_id) return errorResponse(res, "Bill Not Found.", 404)
         return successResponse(res, withTotals(bill))

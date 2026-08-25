@@ -22,4 +22,12 @@ const claimNextNumber = async (tx, tenant_id, field) => {
     return settings[field] - 1
 }
 
-module.exports = { resolveTenantId, claimNextNumber }
+// Shared with billController and paymentController — a bill's payable amount
+// must be computed identically everywhere a payment is validated against it.
+const computeItemsTotal = (items) =>
+    items.reduce((sum, i) => sum + (Number(i.price) - Number(i.discount_per_unit || 0)) * i.quantity, 0)
+
+const computeBillPayable = (bill) =>
+    Math.max(0, computeItemsTotal(bill.items || []) - Number(bill.discount_amount || 0))
+
+module.exports = { resolveTenantId, claimNextNumber, computeItemsTotal, computeBillPayable }

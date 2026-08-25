@@ -69,6 +69,7 @@ model Tenant {
   billing_clients      BillingClient[]
   quotations           Quotation[]
   bills                Bill[]
+  payments             Payment[]
 }
 
 // ============================================
@@ -714,6 +715,7 @@ model Bill {
   quotation      Quotation     @relation(fields: [quotation_id], references: [quotation_id])
   billing_client BillingClient @relation(fields: [billing_client_id], references: [billing_client_id])
   items          BillItem[]
+  payments       Payment[]
 
   @@index([tenant_id])
   @@index([billing_client_id])
@@ -733,4 +735,44 @@ model BillItem {
   bill Bill @relation(fields: [bill_id], references: [bill_id])
 
   @@index([bill_id])
+}
+
+// ============================================
+// BILLING — Phase 3: Payments (generate a Receipt against a Bill)
+// ============================================
+enum PaymentMethod {
+  CASH
+  GPAY
+  CARD
+  BANK_TRANSFER
+  CHEQUE
+}
+
+// Each Payment IS a receipt (receipt_number is the "Receipt #" shown to the
+// studio) — full or split/partial payments are just multiple Payment rows
+// against the same Bill. Overpayment past the bill's payable amount is
+// rejected at the controller level. Payments are immutable once created;
+// correcting a mistake means the studio issues a matching negative-flow
+// adjustment out of band (no edit/void endpoint in this phase).
+model Payment {
+  payment_id     String        @id @default(uuid())
+  tenant_id      String
+  bill_id        String
+  // Per-tenant sequential number (the "Receipt #" printed on the receipt PDF).
+  receipt_number Int
+  amount         Decimal       @db.Decimal(10, 2)
+  method         PaymentMethod
+  remark         String?
+  isactive       Boolean       @default(true)
+  createdBy      String
+  createdAt      DateTime      @default(now())
+  updatedBy      String?
+  updatedAt      DateTime      @updatedAt
+
+  tenant Tenant @relation(fields: [tenant_id], references: [tenant_id])
+  bill   Bill   @relation(fields: [bill_id], references: [bill_id])
+
+  @@index([tenant_id])
+  @@index([bill_id])
+  @@unique([tenant_id, receipt_number])
 }

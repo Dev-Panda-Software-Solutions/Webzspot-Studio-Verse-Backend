@@ -1,6 +1,7 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 const { resolveTenantId, claimNextNumber } = require("../utils/billingAccess")
+const { streamQuotationPdf } = require("../utils/billingPdf")
 
 // Sum of (price - discount_per_unit) * quantity across all line items —
 // the subtotal before the whole-quotation discount applied at Confirm.
@@ -98,6 +99,22 @@ const getQuotationById = async (req, res) => {
     }
 }
 
+const downloadQuotationPdf = async (req, res) => {
+    try {
+        const tenant_id = await resolveTenantId(req)
+        const quotation = await prisma.quotation.findUnique({
+            where: { quotation_id: req.params.id },
+            include: { items: { orderBy: { createdAt: "asc" } }, billing_client: true, tenant: true }
+        })
+        if (!quotation || quotation.tenant_id !== tenant_id) return errorResponse(res, "Quotation Not Found.", 404)
+
+        const settings = await prisma.tenantSettings.findUnique({ where: { tenant_id } })
+        return streamQuotationPdf(res, { tenant: quotation.tenant, settings, quotation })
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
 // Full replace of line items + discount — the quotation builder always sends
 // its whole current item list back, simpler than diffing add/remove/edit.
 const updateQuotation = async (req, res) => {
@@ -148,4 +165,4 @@ const deleteQuotation = async (req, res) => {
     }
 }
 
-module.exports = { createQuotation, getAllQuotations, getQuotationById, updateQuotation, deleteQuotation }
+module.exports = { createQuotation, getAllQuotations, getQuotationById, updateQuotation, deleteQuotation, downloadQuotationPdf }

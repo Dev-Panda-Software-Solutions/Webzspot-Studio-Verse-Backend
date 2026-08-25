@@ -1,6 +1,8 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 const { resolveTenantId, claimNextNumber, computeItemsTotal } = require("../utils/billingAccess")
+const { streamBillPdf } = require("../utils/billingPdf")
+const { getActiveSubscription } = require("../utils/subscriptionAccess")
 
 const normalizeItems = (items) => {
     if (!Array.isArray(items)) return []
@@ -150,4 +152,30 @@ const updateBill = async (req, res) => {
     }
 }
 
-module.exports = { createBillFromQuotation, getAllBills, getBillById, updateBill }
+const downloadBillPdf = async (req, res) => {
+    try {
+        const tenant_id = await resolveTenantId(req)
+        const bill = await prisma.bill.findUnique({
+            where: { bill_id: req.params.id },
+            include: {
+                items: { orderBy: { createdAt: "asc" } },
+                billing_client: true,
+                tenant: true,
+                payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
+            }
+        })
+        if (!bill || bill.tenant_id !== tenant_id) return errorResponse(res, "Bill Not Found.", 404)
+
+        const [settings, subscription] = await Promise.all([
+            prisma.tenantSettings.findUnique({ where: { tenant_id } }),
+            getActiveSubscription(tenant_id)
+        ])
+        const isTrial = subscription?.status === "TRIAL"
+
+        return streamBillPdf(res, { tenant: bill.tenant, settings, bill, isTrial })
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+module.exports = { createBillFromQuotation, getAllBills, getBillById, updateBill, downloadBillPdf }

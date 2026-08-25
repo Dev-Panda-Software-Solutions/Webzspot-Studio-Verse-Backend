@@ -1,6 +1,7 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 const { resolveTenantId, claimNextNumber, computeBillPayable } = require("../utils/billingAccess")
+const { streamReceiptPdf } = require("../utils/billingPdf")
 
 const PAYMENT_METHODS = ["CASH", "GPAY", "CARD", "BANK_TRANSFER", "CHEQUE"]
 
@@ -89,4 +90,37 @@ const getPaymentById = async (req, res) => {
     }
 }
 
-module.exports = { createPayment, getPaymentsForBill, getPaymentById }
+const downloadReceiptPdf = async (req, res) => {
+    try {
+        const tenant_id = await resolveTenantId(req)
+        const payment = await prisma.payment.findUnique({
+            where: { payment_id: req.params.id },
+            include: {
+                tenant: true,
+                bill: {
+                    include: {
+                        items: true,
+                        billing_client: true,
+                        payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
+                    }
+                }
+            }
+        })
+        if (!payment || payment.tenant_id !== tenant_id) return errorResponse(res, "Payment Not Found.", 404)
+
+        const settings = await prisma.tenantSettings.findUnique({ where: { tenant_id } })
+        const payable = computeBillPayable(payment.bill)
+        // Sum only payments up to and including this receipt (by receipt_number)
+        // so an older receipt still shows the balance as it stood at that time.
+        const paidThroughThis = payment.bill.payments
+            .filter(p => p.receipt_number <= payment.receipt_number)
+            .reduce((sum, p) => sum + Number(p.amount), 0)
+        const balanceAfter = Math.max(0, payable - paidThroughThis)
+
+        return streamReceiptPdf(res, { tenant: payment.tenant, settings, payment, bill: payment.bill, balanceAfter })
+    } catch (err) {
+        return errorResponse(res, sanitizePrismaError(err))
+    }
+}
+
+module.exports = { createPayment, getPaymentsForBill, getPaymentById, downloadReceiptPdf }

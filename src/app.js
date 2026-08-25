@@ -40,6 +40,9 @@ const tenantSubscriptionRoutes = require("./routes/tenantSubscriptionRoutes")
 const platformSettingsRoutes = require("./routes/platformSettingsRoutes")
 const supportTicketRoutes = require("./routes/supportTicketRoutes")
 const eventGuestRoutes = require("./routes/eventGuestRoutes")
+const studioServiceRoutes = require("./routes/studioServiceRoutes")
+const billingClientRoutes = require("./routes/billingClientRoutes")
+const quotationRoutes = require("./routes/quotationRoutes")
 const { loginLimiter, uploadLimiter, publicUploadLimiter } = require("./middleware/rateLimiter")
 const { pruneExpired } = require("./utils/tokenBlocklist")
 
@@ -107,6 +110,9 @@ app.use("/api/billing", tenantSubscriptionRoutes)
 app.use("/api/platform-settings", platformSettingsRoutes)
 app.use("/api/support-tickets", supportTicketRoutes)
 app.use("/api/event-guests", eventGuestRoutes)
+app.use("/api/studio-services", studioServiceRoutes)
+app.use("/api/billing-clients", billingClientRoutes)
+app.use("/api/quotations", quotationRoutes)
 // Branding/cover/profile assets — safe to serve publicly (not sensitive client media).
 // All event media files require authentication via /api/media token flow.
 const staticOpts = {

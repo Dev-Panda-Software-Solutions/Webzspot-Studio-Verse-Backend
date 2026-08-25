@@ -65,6 +65,9 @@ model Tenant {
   tenant_subscriptions TenantSubscription[]
   tenant_wallet        TenantWallet?
   wallet_transactions  WalletTransaction[]
+  studio_services      StudioService[]
+  billing_clients      BillingClient[]
+  quotations           Quotation[]
 }
 
 // ============================================
@@ -330,6 +333,16 @@ model TenantSettings {
   // Brand colours — applied to the client-facing gallery (accent/gold theme)
   primary_color         String?
   secondary_color       String?
+  // GST details shown on Quotation/Bill documents when set — display only,
+  // no automatic tax calculation is done from these.
+  gstin_number          String?
+  gst_state             String?
+  // Per-tenant sequential document numbering (Quotation #, Bill #, Receipt #).
+  // Incremented atomically inside the same transaction that creates the
+  // document, so "next" always reflects the number about to be issued.
+  next_quotation_number Int      @default(1)
+  next_bill_number      Int      @default(1)
+  next_receipt_number   Int      @default(1)
   isactive              Boolean  @default(true)
   createdBy             String
   createdAt             DateTime @default(now())
@@ -572,4 +585,93 @@ model SupportTicketReply {
   ticket SupportTicket @relation(fields: [support_ticket_id], references: [support_ticket_id])
 
   @@index([support_ticket_id])
+}
+
+// ============================================
+// BILLING — Phase 1: Services catalog, Billing Clients, Quotations
+// (Bills, Payments/Receipts, GST-on-PDF follow in later phases)
+// ============================================
+
+// A studio's reusable catalog of services/products/packages, managed from
+// their own Settings page — this is what populates "Add Items" on a quotation.
+model StudioService {
+  studio_service_id String   @id @default(uuid())
+  tenant_id          String
+  name               String
+  price              Decimal? @db.Decimal(10, 2)
+  isactive           Boolean  @default(true)
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedBy          String?
+  updatedAt          DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenant_id], references: [tenant_id])
+
+  @@index([tenant_id])
+}
+
+// A billing contact — deliberately NOT the same as the gallery-login User.
+// Created inline from "New User" on the quotation flow (name + phone/email
+// only, no password) or picked from "Existing User" once one exists.
+model BillingClient {
+  billing_client_id String   @id @default(uuid())
+  tenant_id          String
+  name               String
+  email              String?
+  phone              String?
+  isactive           Boolean  @default(true)
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedBy          String?
+  updatedAt          DateTime @updatedAt
+
+  tenant     Tenant      @relation(fields: [tenant_id], references: [tenant_id])
+  quotations Quotation[]
+
+  @@index([tenant_id])
+}
+
+enum QuotationStatus {
+  DRAFT
+  CONFIRMED
+}
+
+model Quotation {
+  quotation_id      String          @id @default(uuid())
+  tenant_id         String
+  billing_client_id String
+  // Per-tenant sequential number (the "Order No" / "Quotation #" shown to the studio).
+  quotation_number  Int
+  status            QuotationStatus @default(DRAFT)
+  // Whole-quotation discount applied at the Confirm step (flat rupee amount).
+  discount_amount   Decimal         @default(0) @db.Decimal(10, 2)
+  isactive          Boolean         @default(true)
+  createdBy         String
+  createdAt         DateTime        @default(now())
+  updatedBy         String?
+  updatedAt         DateTime        @updatedAt
+
+  tenant         Tenant          @relation(fields: [tenant_id], references: [tenant_id])
+  billing_client BillingClient   @relation(fields: [billing_client_id], references: [billing_client_id])
+  items          QuotationItem[]
+
+  @@index([tenant_id])
+  @@index([billing_client_id])
+  @@unique([tenant_id, quotation_number])
+}
+
+model QuotationItem {
+  quotation_item_id String   @id @default(uuid())
+  quotation_id       String
+  name               String
+  price              Decimal  @db.Decimal(10, 2)
+  quantity           Int      @default(1)
+  // Flat rupee discount applied per unit (matches "Discount For Per Quantity" in the UI).
+  discount_per_unit  Decimal  @default(0) @db.Decimal(10, 2)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  quotation Quotation @relation(fields: [quotation_id], references: [quotation_id])
+
+  @@index([quotation_id])
 }

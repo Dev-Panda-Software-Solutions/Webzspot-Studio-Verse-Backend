@@ -62,13 +62,15 @@ const updateTenantSettings = async (req, res) => {
             if (!isOwner) return errorResponse(res, 'You can only update your own settings.', 403)
         }
 
-        const { tenant_watermark_path, primary_color, secondary_color } = req.body
+        const { tenant_watermark_path, primary_color, secondary_color, gstin_number, gst_state } = req.body
         const settings = await prisma.tenantSettings.upsert({
             where: { tenant_id: req.params.tenant_id },
             update: {
                 ...(tenant_watermark_path !== undefined ? { tenant_watermark_path } : {}),
                 ...(primary_color !== undefined ? { primary_color } : {}),
                 ...(secondary_color !== undefined ? { secondary_color } : {}),
+                ...(gstin_number !== undefined ? { gstin_number } : {}),
+                ...(gst_state !== undefined ? { gst_state } : {}),
                 updatedBy: req.user?.id
             },
             create: {
@@ -76,6 +78,8 @@ const updateTenantSettings = async (req, res) => {
                 tenant_watermark_path,
                 primary_color,
                 secondary_color,
+                gstin_number,
+                gst_state,
                 createdBy: req.user?.id || "SYSTEM"
             }
         })

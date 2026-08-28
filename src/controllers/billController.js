@@ -1,6 +1,6 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { resolveTenantId, claimNextNumber, computeItemsTotal } = require("../utils/billingAccess")
+const { resolveTenantId, claimNextNumber, computeItemsTotal, resolveClient } = require("../utils/billingAccess")
 const { streamBillPdf } = require("../utils/billingPdf")
 const { getActiveSubscription } = require("../utils/subscriptionAccess")
 
@@ -22,7 +22,7 @@ const withTotals = (bill) => {
     const payable_amount = Math.max(0, items_total - discount_amount)
     const paid_amount = (bill.payments || []).reduce((sum, p) => sum + Number(p.amount), 0)
     const balance_due = Math.max(0, payable_amount - paid_amount)
-    return { ...bill, items_total, payable_amount, paid_amount, balance_due }
+    return { ...bill, client: resolveClient(bill), items_total, payable_amount, paid_amount, balance_due }
 }
 
 // Confirming a Quotation is the only way a Bill comes into existence — its
@@ -51,6 +51,7 @@ const createBillFromQuotation = async (req, res) => {
                     tenant_id,
                     quotation_id,
                     user_id: quotation.user_id,
+                    billing_client_id: quotation.billing_client_id,
                     bill_number,
                     discount_amount: quotation.discount_amount,
                     createdBy: req.user?.id,
@@ -63,7 +64,7 @@ const createBillFromQuotation = async (req, res) => {
                         }))
                     }
                 },
-                include: { items: true, client: true, quotation: true }
+                include: { items: true, client: true, billing_client: true, quotation: true }
             })
             await tx.quotation.update({ where: { quotation_id }, data: { status: "CONFIRMED" } })
             return created
@@ -88,7 +89,7 @@ const getAllBills = async (req, res) => {
         const [rawItems, total] = await Promise.all([
             prisma.bill.findMany({
                 where, skip, take: limit, orderBy: { bill_number: "desc" },
-                include: { items: true, client: true, quotation: { select: { quotation_number: true } }, payments: { where: { isactive: true } } }
+                include: { items: true, client: true, billing_client: true, quotation: { select: { quotation_number: true } }, payments: { where: { isactive: true } } }
             }),
             prisma.bill.count({ where })
         ])
@@ -108,6 +109,7 @@ const getBillById = async (req, res) => {
             include: {
                 items: { orderBy: { createdAt: "asc" } },
                 client: true,
+                billing_client: true,
                 quotation: { select: { quotation_number: true } },
                 payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
             }
@@ -142,7 +144,7 @@ const updateBill = async (req, res) => {
                     ...(normalizedItems !== undefined ? { items: { create: normalizedItems } } : {}),
                     updatedBy: req.user?.id
                 },
-                include: { items: true, client: true, quotation: { select: { quotation_number: true } } }
+                include: { items: true, client: true, billing_client: true, quotation: { select: { quotation_number: true } } }
             })
         })
 
@@ -160,6 +162,7 @@ const downloadBillPdf = async (req, res) => {
             include: {
                 items: { orderBy: { createdAt: "asc" } },
                 client: true,
+                billing_client: true,
                 tenant: true,
                 payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
             }
@@ -172,7 +175,7 @@ const downloadBillPdf = async (req, res) => {
         ])
         const isTrial = subscription?.status === "TRIAL"
 
-        return streamBillPdf(res, { tenant: bill.tenant, settings, bill, isTrial })
+        return streamBillPdf(res, { tenant: bill.tenant, settings, bill: { ...bill, client: resolveClient(bill) }, isTrial })
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }

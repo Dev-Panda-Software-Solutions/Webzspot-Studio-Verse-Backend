@@ -1,6 +1,6 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { resolveTenantId, claimNextNumber, computeBillPayable } = require("../utils/billingAccess")
+const { resolveTenantId, claimNextNumber, computeBillPayable, resolveClient } = require("../utils/billingAccess")
 const { streamReceiptPdf } = require("../utils/billingPdf")
 
 const PAYMENT_METHODS = ["CASH", "GPAY", "CARD", "BANK_TRANSFER", "CHEQUE"]
@@ -73,9 +73,21 @@ const getAllPayments = async (req, res) => {
             where: { tenant_id, isactive: true },
             take: limit,
             orderBy: { createdAt: "desc" },
-            include: { bill: { select: { bill_number: true, client: { select: { user_name: true } } } } }
+            include: {
+                bill: {
+                    select: {
+                        bill_number: true,
+                        client: { select: { user_name: true } },
+                        billing_client: { select: { name: true } }
+                    }
+                }
+            }
         })
-        return successResponse(res, payments)
+        const items = payments.map(p => ({
+            ...p,
+            bill: p.bill && { ...p.bill, client_name: p.bill.client?.user_name || p.bill.billing_client?.name || null }
+        }))
+        return successResponse(res, items)
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -102,10 +114,10 @@ const getPaymentById = async (req, res) => {
         const tenant_id = await resolveTenantId(req)
         const payment = await prisma.payment.findUnique({
             where: { payment_id: req.params.id },
-            include: { bill: { include: { client: true, quotation: { select: { quotation_number: true } } } } }
+            include: { bill: { include: { client: true, billing_client: true, quotation: { select: { quotation_number: true } } } } }
         })
         if (!payment || payment.tenant_id !== tenant_id) return errorResponse(res, "Payment Not Found.", 404)
-        return successResponse(res, payment)
+        return successResponse(res, { ...payment, bill: { ...payment.bill, client: resolveClient(payment.bill) } })
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -122,6 +134,7 @@ const downloadReceiptPdf = async (req, res) => {
                     include: {
                         items: true,
                         client: true,
+                        billing_client: true,
                         payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
                     }
                 }
@@ -138,7 +151,7 @@ const downloadReceiptPdf = async (req, res) => {
             .reduce((sum, p) => sum + Number(p.amount), 0)
         const balanceAfter = Math.max(0, payable - paidThroughThis)
 
-        return streamReceiptPdf(res, { tenant: payment.tenant, settings, payment, bill: payment.bill, balanceAfter })
+        return streamReceiptPdf(res, { tenant: payment.tenant, settings, payment, bill: { ...payment.bill, client: resolveClient(payment.bill) }, balanceAfter })
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }

@@ -1,6 +1,6 @@
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
-const { resolveTenantId, claimNextNumber, computeItemsTotal } = require("../utils/billingAccess")
+const { resolveTenantId, claimNextNumber, computeItemsTotal, resolveClient } = require("../utils/billingAccess")
 const { streamQuotationPdf } = require("../utils/billingPdf")
 
 const normalizeItems = (items) => {
@@ -19,7 +19,7 @@ const withTotals = (quotation) => {
     const items_total = computeItemsTotal(quotation.items || [])
     const discount_amount = Number(quotation.discount_amount || 0)
     const payable_amount = Math.max(0, items_total - discount_amount)
-    return { ...quotation, items_total, payable_amount }
+    return { ...quotation, client: resolveClient(quotation), items_total, payable_amount }
 }
 
 const createQuotation = async (req, res) => {
@@ -45,7 +45,7 @@ const createQuotation = async (req, res) => {
                     createdBy: req.user?.id,
                     items: { create: normalizedItems }
                 },
-                include: { items: true, client: true }
+                include: { items: true, client: true, billing_client: true }
             })
         })
 
@@ -68,7 +68,7 @@ const getAllQuotations = async (req, res) => {
         const [rawItems, total] = await Promise.all([
             prisma.quotation.findMany({
                 where, skip, take: limit, orderBy: { quotation_number: "desc" },
-                include: { items: true, client: true, bill: { select: { bill_id: true, bill_number: true } } }
+                include: { items: true, client: true, billing_client: true, bill: { select: { bill_id: true, bill_number: true } } }
             }),
             prisma.quotation.count({ where })
         ])
@@ -85,7 +85,7 @@ const getQuotationById = async (req, res) => {
         const tenant_id = await resolveTenantId(req)
         const quotation = await prisma.quotation.findUnique({
             where: { quotation_id: req.params.id },
-            include: { items: { orderBy: { createdAt: "asc" } }, client: true, bill: { select: { bill_id: true, bill_number: true } } }
+            include: { items: { orderBy: { createdAt: "asc" } }, client: true, billing_client: true, bill: { select: { bill_id: true, bill_number: true } } }
         })
         if (!quotation || quotation.tenant_id !== tenant_id) return errorResponse(res, "Quotation Not Found.", 404)
         return successResponse(res, withTotals(quotation))
@@ -99,12 +99,12 @@ const downloadQuotationPdf = async (req, res) => {
         const tenant_id = await resolveTenantId(req)
         const quotation = await prisma.quotation.findUnique({
             where: { quotation_id: req.params.id },
-            include: { items: { orderBy: { createdAt: "asc" } }, client: true, tenant: true }
+            include: { items: { orderBy: { createdAt: "asc" } }, client: true, billing_client: true, tenant: true }
         })
         if (!quotation || quotation.tenant_id !== tenant_id) return errorResponse(res, "Quotation Not Found.", 404)
 
         const settings = await prisma.tenantSettings.findUnique({ where: { tenant_id } })
-        return streamQuotationPdf(res, { tenant: quotation.tenant, settings, quotation })
+        return streamQuotationPdf(res, { tenant: quotation.tenant, settings, quotation: { ...quotation, client: resolveClient(quotation) } })
     } catch (err) {
         return errorResponse(res, sanitizePrismaError(err))
     }
@@ -133,7 +133,7 @@ const updateQuotation = async (req, res) => {
                     ...(normalizedItems !== undefined ? { items: { create: normalizedItems } } : {}),
                     updatedBy: req.user?.id
                 },
-                include: { items: true, client: true }
+                include: { items: true, client: true, billing_client: true }
             })
         })
 

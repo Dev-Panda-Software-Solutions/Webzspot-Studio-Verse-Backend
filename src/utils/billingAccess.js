@@ -30,4 +30,22 @@ const computeItemsTotal = (items) =>
 const computeBillPayable = (bill) =>
     Math.max(0, computeItemsTotal(bill.items || []) - Number(bill.discount_amount || 0))
 
-module.exports = { resolveTenantId, claimNextNumber, computeItemsTotal, computeBillPayable }
+// A Quotation/Bill's client is either the new `client` (User) relation, or —
+// for rows created before that migration — the legacy `billing_client`
+// (BillingClient) relation. Normalizes both into the User-shaped object the
+// frontend/PDF code already expects, so callers never need to know which era
+// a given record is from. Requires the caller to have included both relations.
+const resolveClient = (record) => {
+    if (record.client) return record.client
+    if (record.billing_client) {
+        return {
+            user_id: null,
+            user_name: record.billing_client.name,
+            user_email_id: record.billing_client.email,
+            user_phone_number: record.billing_client.phone,
+        }
+    }
+    return null
+}
+
+module.exports = { resolveTenantId, claimNextNumber, computeItemsTotal, computeBillPayable, resolveClient }

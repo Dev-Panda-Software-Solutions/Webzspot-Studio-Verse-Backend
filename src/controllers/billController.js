@@ -50,7 +50,7 @@ const createBillFromQuotation = async (req, res) => {
                 data: {
                     tenant_id,
                     quotation_id,
-                    billing_client_id: quotation.billing_client_id,
+                    user_id: quotation.user_id,
                     bill_number,
                     discount_amount: quotation.discount_amount,
                     createdBy: req.user?.id,
@@ -63,7 +63,7 @@ const createBillFromQuotation = async (req, res) => {
                         }))
                     }
                 },
-                include: { items: true, billing_client: true, quotation: true }
+                include: { items: true, client: true, quotation: true }
             })
             await tx.quotation.update({ where: { quotation_id }, data: { status: "CONFIRMED" } })
             return created
@@ -88,7 +88,7 @@ const getAllBills = async (req, res) => {
         const [rawItems, total] = await Promise.all([
             prisma.bill.findMany({
                 where, skip, take: limit, orderBy: { bill_number: "desc" },
-                include: { items: true, billing_client: true, quotation: { select: { quotation_number: true } }, payments: { where: { isactive: true } } }
+                include: { items: true, client: true, quotation: { select: { quotation_number: true } }, payments: { where: { isactive: true } } }
             }),
             prisma.bill.count({ where })
         ])
@@ -107,7 +107,7 @@ const getBillById = async (req, res) => {
             where: { bill_id: req.params.id },
             include: {
                 items: { orderBy: { createdAt: "asc" } },
-                billing_client: true,
+                client: true,
                 quotation: { select: { quotation_number: true } },
                 payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
             }
@@ -142,7 +142,7 @@ const updateBill = async (req, res) => {
                     ...(normalizedItems !== undefined ? { items: { create: normalizedItems } } : {}),
                     updatedBy: req.user?.id
                 },
-                include: { items: true, billing_client: true, quotation: { select: { quotation_number: true } } }
+                include: { items: true, client: true, quotation: { select: { quotation_number: true } } }
             })
         })
 
@@ -159,7 +159,7 @@ const downloadBillPdf = async (req, res) => {
             where: { bill_id: req.params.id },
             include: {
                 items: { orderBy: { createdAt: "asc" } },
-                billing_client: true,
+                client: true,
                 tenant: true,
                 payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
             }

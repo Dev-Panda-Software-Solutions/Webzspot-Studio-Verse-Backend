@@ -2,29 +2,40 @@ const bcrypt = require("bcryptjs")
 const prisma = require("../utils/prismaClient")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 
+// Clients are just Users. A client created purely for billing (quotations/
+// bills, no gallery access yet) is a bare row with no Login and no
+// validity_days/expiry_date — those only get set once an admin actually
+// grants event access (see createUserInEvent). username/password are
+// therefore optional here: pass both to also create a Login immediately
+// (the original "create a gallery-access client with no event yet" case),
+// or omit them for a billing-only contact.
 const createUser = async (req, res) => {
     try {
         const { user_name, user_phone_number, user_email_id, validity_days, expiry_date, profile_url, username, password } = req.body
 
+        if (!user_name?.trim()) return errorResponse(res, 'Name is required.', 400)
+        if ((username && !password) || (password && !username)) {
+            return errorResponse(res, 'Both a username and password are required to grant login access.', 400)
+        }
+
         const normalizedEmail = user_email_id?.trim() || null
         const [existingLogin, existingEmail, loginRecord] = await Promise.all([
-            prisma.login.findFirst({ where: { username } }),
+            username ? prisma.login.findFirst({ where: { username } }) : null,
             normalizedEmail ? prisma.user.findFirst({ where: { user_email_id: normalizedEmail } }) : null,
             prisma.login.findUnique({ where: { transid: req.user?.id } })
         ])
         if (existingLogin) return errorResponse(res, 'Username already taken. Choose another.', 400)
         if (existingEmail) return errorResponse(res, 'Email already registered.', 400)
 
-        const hashedPassword = await bcrypt.hash(password, 10)
         const created_by_tenant_id = loginRecord?.tenant_id || null
 
         const user = await prisma.user.create({
             data: {
-                user_name,
+                user_name: user_name.trim(),
                 user_phone_number: user_phone_number?.trim() || null,
                 user_email_id: normalizedEmail,
-                validity_days: String(validity_days ?? ''),
-                expiry_date: new Date(expiry_date),
+                validity_days: validity_days !== undefined ? String(validity_days) : null,
+                expiry_date: expiry_date ? new Date(expiry_date) : null,
                 profile_url,
                 role: "USER",
                 created_by_tenant_id,
@@ -32,9 +43,12 @@ const createUser = async (req, res) => {
             }
         })
 
-        await prisma.login.create({
-            data: { username, password_hash: hashedPassword, role: "USER", user_id: user.user_id, createdBy: req.user?.id || "SYSTEM" }
-        })
+        if (username && password) {
+            const hashedPassword = await bcrypt.hash(password, 10)
+            await prisma.login.create({
+                data: { username, password_hash: hashedPassword, role: "USER", user_id: user.user_id, createdBy: req.user?.id || "SYSTEM" }
+            })
+        }
 
         return successResponse(res, user, "User Created Successfully.", 201)
     } catch (err) {
@@ -153,6 +167,15 @@ const getAllUsers = async (req, res) => {
         } else if (req.query.created_by_tenant_id) {
             // SUPER_ADMIN drill-down: restrict to one studio's clients.
             where.created_by_tenant_id = req.query.created_by_tenant_id
+        }
+
+        const search = req.query.search?.trim()
+        if (search) {
+            where.OR = [
+                { user_name: { contains: search, mode: "insensitive" } },
+                { user_email_id: { contains: search, mode: "insensitive" } },
+                { user_phone_number: { contains: search, mode: "insensitive" } },
+            ]
         }
 
         const [rawItems, total] = await Promise.all([

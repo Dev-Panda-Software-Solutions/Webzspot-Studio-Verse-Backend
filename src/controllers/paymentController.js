@@ -73,7 +73,7 @@ const getAllPayments = async (req, res) => {
             where: { tenant_id, isactive: true },
             take: limit,
             orderBy: { createdAt: "desc" },
-            include: { bill: { select: { bill_number: true, billing_client: { select: { name: true } } } } }
+            include: { bill: { select: { bill_number: true, client: { select: { user_name: true } } } } }
         })
         return successResponse(res, payments)
     } catch (err) {
@@ -102,7 +102,7 @@ const getPaymentById = async (req, res) => {
         const tenant_id = await resolveTenantId(req)
         const payment = await prisma.payment.findUnique({
             where: { payment_id: req.params.id },
-            include: { bill: { include: { billing_client: true, quotation: { select: { quotation_number: true } } } } }
+            include: { bill: { include: { client: true, quotation: { select: { quotation_number: true } } } } }
         })
         if (!payment || payment.tenant_id !== tenant_id) return errorResponse(res, "Payment Not Found.", 404)
         return successResponse(res, payment)
@@ -121,7 +121,7 @@ const downloadReceiptPdf = async (req, res) => {
                 bill: {
                     include: {
                         items: true,
-                        billing_client: true,
+                        client: true,
                         payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
                     }
                 }

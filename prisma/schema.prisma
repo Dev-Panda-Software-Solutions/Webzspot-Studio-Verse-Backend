@@ -66,7 +66,6 @@ model Tenant {
   tenant_wallet        TenantWallet?
   wallet_transactions  WalletTransaction[]
   studio_services      StudioService[]
-  billing_clients      BillingClient[]
   quotations           Quotation[]
   bills                Bill[]
   payments             Payment[]
@@ -76,25 +75,31 @@ model Tenant {
 // USER
 // ============================================
 model User {
-  user_id              String   @id @default(uuid())
+  user_id              String    @id @default(uuid())
   user_name            String
   user_phone_number    String?
-  user_email_id        String?  @unique
-  validity_days        String
-  expiry_date          DateTime
+  user_email_id        String?   @unique
+  // Both null for a client that only exists for billing (quotations/bills) and
+  // has not been granted gallery access to any event yet — a bare User row
+  // with no Login. Set together, by createUserInEvent, the moment an admin
+  // actually grants that access.
+  validity_days        String?
+  expiry_date          DateTime?
   profile_url          String?
-  role                 Role     @default(USER)
-  isactive             Boolean  @default(true)
+  role                 Role      @default(USER)
+  isactive             Boolean   @default(true)
   created_by_tenant_id String?
   createdBy            String
-  createdAt            DateTime @default(now())
+  createdAt            DateTime  @default(now())
   updatedBy            String?
-  updatedAt            DateTime @updatedAt
+  updatedAt            DateTime  @updatedAt
 
   login           Login?
   event_mapping   EventUserMapping[]
   favourite_media UserFavouriteMediaMapping[]
   created_by      Tenant?                     @relation(fields: [created_by_tenant_id], references: [tenant_id])
+  quotations      Quotation[]
+  bills           Bill[]
 
   @@index([created_by_tenant_id])
 }
@@ -612,55 +617,37 @@ model StudioService {
   @@index([tenant_id])
 }
 
-// A billing contact — deliberately NOT the same as the gallery-login User.
-// Created inline from "New User" on the quotation flow (name + phone/email
-// only, no password) or picked from "Existing User" once one exists.
-model BillingClient {
-  billing_client_id String   @id @default(uuid())
-  tenant_id          String
-  name               String
-  email              String?
-  phone              String?
-  isactive           Boolean  @default(true)
-  createdBy          String
-  createdAt          DateTime @default(now())
-  updatedBy          String?
-  updatedAt          DateTime @updatedAt
-
-  tenant     Tenant      @relation(fields: [tenant_id], references: [tenant_id])
-  quotations Quotation[]
-  bills      Bill[]
-
-  @@index([tenant_id])
-}
-
 enum QuotationStatus {
   DRAFT
   CONFIRMED
 }
 
+// The client is just a User — the same record used for gallery-login access.
+// Creating a client purely for a quotation makes a bare User row (no Login,
+// null validity_days/expiry_date); it only gains gallery access if/when an
+// admin later assigns it to an event via the normal Access Board flow.
 model Quotation {
-  quotation_id      String          @id @default(uuid())
-  tenant_id         String
-  billing_client_id String
+  quotation_id     String          @id @default(uuid())
+  tenant_id        String
+  user_id          String
   // Per-tenant sequential number (the "Order No" / "Quotation #" shown to the studio).
-  quotation_number  Int
-  status            QuotationStatus @default(DRAFT)
+  quotation_number Int
+  status           QuotationStatus @default(DRAFT)
   // Whole-quotation discount applied at the Confirm step (flat rupee amount).
-  discount_amount   Decimal         @default(0) @db.Decimal(10, 2)
-  isactive          Boolean         @default(true)
-  createdBy         String
-  createdAt         DateTime        @default(now())
-  updatedBy         String?
-  updatedAt         DateTime        @updatedAt
+  discount_amount  Decimal         @default(0) @db.Decimal(10, 2)
+  isactive         Boolean         @default(true)
+  createdBy        String
+  createdAt        DateTime        @default(now())
+  updatedBy        String?
+  updatedAt        DateTime        @updatedAt
 
-  tenant         Tenant          @relation(fields: [tenant_id], references: [tenant_id])
-  billing_client BillingClient   @relation(fields: [billing_client_id], references: [billing_client_id])
-  items          QuotationItem[]
-  bill           Bill?
+  tenant Tenant          @relation(fields: [tenant_id], references: [tenant_id])
+  client User            @relation(fields: [user_id], references: [user_id])
+  items  QuotationItem[]
+  bill   Bill?
 
   @@index([tenant_id])
-  @@index([billing_client_id])
+  @@index([user_id])
   @@unique([tenant_id, quotation_number])
 }
 
@@ -695,30 +682,30 @@ enum BillStatus {
 // Quotation. Editable only while UNPAID — once a Payment (Phase 3) exists,
 // the bill amount must stay fixed.
 model Bill {
-  bill_id           String     @id @default(uuid())
-  tenant_id         String
-  quotation_id      String     @unique
-  billing_client_id String
+  bill_id         String     @id @default(uuid())
+  tenant_id       String
+  quotation_id    String     @unique
+  user_id         String
   // Per-tenant sequential number (the "Bill #" shown to the studio).
-  bill_number       Int
-  status            BillStatus @default(UNPAID)
+  bill_number     Int
+  status          BillStatus @default(UNPAID)
   // Whole-bill discount (flat rupee amount) — independent of the quotation's
   // own discount_amount, since the studio may renegotiate at billing time.
-  discount_amount   Decimal    @default(0) @db.Decimal(10, 2)
-  isactive          Boolean    @default(true)
-  createdBy         String
-  createdAt         DateTime   @default(now())
-  updatedBy         String?
-  updatedAt         DateTime   @updatedAt
+  discount_amount Decimal    @default(0) @db.Decimal(10, 2)
+  isactive        Boolean    @default(true)
+  createdBy       String
+  createdAt       DateTime   @default(now())
+  updatedBy       String?
+  updatedAt       DateTime   @updatedAt
 
-  tenant         Tenant        @relation(fields: [tenant_id], references: [tenant_id])
-  quotation      Quotation     @relation(fields: [quotation_id], references: [quotation_id])
-  billing_client BillingClient @relation(fields: [billing_client_id], references: [billing_client_id])
-  items          BillItem[]
-  payments       Payment[]
+  tenant    Tenant     @relation(fields: [tenant_id], references: [tenant_id])
+  quotation Quotation  @relation(fields: [quotation_id], references: [quotation_id])
+  client    User       @relation(fields: [user_id], references: [user_id])
+  items     BillItem[]
+  payments  Payment[]
 
   @@index([tenant_id])
-  @@index([billing_client_id])
+  @@index([user_id])
   @@unique([tenant_id, bill_number])
 }
 

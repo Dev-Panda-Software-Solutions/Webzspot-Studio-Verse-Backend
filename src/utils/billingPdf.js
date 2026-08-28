@@ -26,8 +26,8 @@ const drawLetterhead = (doc, tenant, settings, docLabel, docNumber, docDate) => 
 
 const drawClientBlock = (doc, client, y = 145) => {
     doc.fontSize(9).font("Helvetica-Bold").fillColor(MUTED).text("BILLED TO", 50, y)
-    doc.fontSize(11).font("Helvetica-Bold").fillColor(DARK).text(client?.name || "—", 50, y + 14)
-    doc.fontSize(9).font("Helvetica").fillColor(MUTED).text([client?.email, client?.phone].filter(Boolean).join("  |  ") || "—", 50, y + 30)
+    doc.fontSize(11).font("Helvetica-Bold").fillColor(DARK).text(client?.user_name || "—", 50, y + 14)
+    doc.fontSize(9).font("Helvetica").fillColor(MUTED).text([client?.user_email_id, client?.user_phone_number].filter(Boolean).join("  |  ") || "—", 50, y + 30)
     return y + 55
 }
 
@@ -95,7 +95,7 @@ const streamQuotationPdf = (res, { tenant, settings, quotation }) => {
     doc.pipe(res)
 
     drawLetterhead(doc, tenant, settings, "QUOTATION", quotation.quotation_number, quotation.createdAt)
-    const afterClient = drawClientBlock(doc, quotation.billing_client)
+    const afterClient = drawClientBlock(doc, quotation.client)
     drawItemsTable(doc, quotation.items, quotation.discount_amount, afterClient)
 
     doc.fontSize(8).fillColor(MUTED).text(
@@ -112,7 +112,7 @@ const streamBillPdf = (res, { tenant, settings, bill, isTrial }) => {
     doc.pipe(res)
 
     drawLetterhead(doc, tenant, settings, "BILL", bill.bill_number, bill.createdAt)
-    const afterClient = drawClientBlock(doc, bill.billing_client)
+    const afterClient = drawClientBlock(doc, bill.client)
     const { y, payable } = drawItemsTable(doc, bill.items, bill.discount_amount, afterClient)
 
     const paidAmount = (bill.payments || []).reduce((sum, p) => sum + Number(p.amount), 0)
@@ -147,7 +147,7 @@ const streamReceiptPdf = (res, { tenant, settings, payment, bill, balanceAfter }
     doc.pipe(res)
 
     drawLetterhead(doc, tenant, settings, "RECEIPT", payment.receipt_number, payment.createdAt)
-    let y = drawClientBlock(doc, bill.billing_client)
+    let y = drawClientBlock(doc, bill.client)
 
     doc.fontSize(9).font("Helvetica-Bold").fillColor(MUTED).text("AGAINST BILL", 320, 145)
     doc.fontSize(11).font("Helvetica-Bold").fillColor(DARK).text(`#${bill.bill_number}`, 320, 159)

@@ -58,6 +58,20 @@ const trustProxyValue = (() => {
     return Number.isFinite(parsed) ? parsed : raw
 })()
 app.set("trust proxy", trustProxyValue)
+
+// Hardcoded, unconditional CORS — set before ANY other middleware (including
+// helmet) so every response carries these headers even if something further
+// down the chain throws. Bearer-token auth (not cookies) is used everywhere
+// in this app, so a literal "*" origin is safe — no credentialed requests
+// depend on echoing a specific origin back.
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*")
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
+    if (req.method === "OPTIONS") return res.sendStatus(204)
+    next()
+})
+
 app.use(requestLogger)
 
 app.use(helmet({

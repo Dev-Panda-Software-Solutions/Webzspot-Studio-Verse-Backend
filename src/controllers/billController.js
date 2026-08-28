@@ -4,18 +4,6 @@ const { resolveTenantId, claimNextNumber, computeItemsTotal, resolveClient } = r
 const { streamBillPdf } = require("../utils/billingPdf")
 const { getActiveSubscription } = require("../utils/subscriptionAccess")
 
-const normalizeItems = (items) => {
-    if (!Array.isArray(items)) return []
-    return items
-        .filter(i => i?.name?.trim())
-        .map(i => ({
-            name: i.name.trim(),
-            price: Number(i.price) || 0,
-            quantity: Math.max(1, parseInt(i.quantity) || 1),
-            discount_per_unit: Number(i.discount_per_unit) || 0
-        }))
-}
-
 const withTotals = (bill) => {
     const items_total = computeItemsTotal(bill.items || [])
     const discount_amount = Number(bill.discount_amount || 0)
@@ -26,8 +14,9 @@ const withTotals = (bill) => {
 }
 
 // Confirming a Quotation is the only way a Bill comes into existence — its
-// line items are copied across (not referenced) so the Bill can later be
-// edited independently of the source Quotation.
+// line items are copied across (not referenced), since a Bill is a fixed
+// document from that point on: no item or discount edits, ever, only
+// payments recorded against it.
 const createBillFromQuotation = async (req, res) => {
     try {
         const tenant_id = await resolveTenantId(req)
@@ -121,39 +110,6 @@ const getBillById = async (req, res) => {
     }
 }
 
-// Editable only while UNPAID — once Payments (Phase 3) exist against a bill,
-// its amount must stay fixed so receipts always reconcile.
-const updateBill = async (req, res) => {
-    try {
-        const tenant_id = await resolveTenantId(req)
-        const existing = await prisma.bill.findUnique({ where: { bill_id: req.params.id } })
-        if (!existing || existing.tenant_id !== tenant_id) return errorResponse(res, "Bill Not Found.", 404)
-        if (existing.status !== "UNPAID") return errorResponse(res, "This bill already has payments recorded and can no longer be edited.", 409)
-
-        const { items, discount_amount } = req.body
-        const normalizedItems = items !== undefined ? normalizeItems(items) : undefined
-
-        const bill = await prisma.$transaction(async (tx) => {
-            if (normalizedItems !== undefined) {
-                await tx.billItem.deleteMany({ where: { bill_id: req.params.id } })
-            }
-            return tx.bill.update({
-                where: { bill_id: req.params.id },
-                data: {
-                    ...(discount_amount !== undefined ? { discount_amount: Number(discount_amount) || 0 } : {}),
-                    ...(normalizedItems !== undefined ? { items: { create: normalizedItems } } : {}),
-                    updatedBy: req.user?.id
-                },
-                include: { items: true, client: true, billing_client: true, quotation: { select: { quotation_number: true } } }
-            })
-        })
-
-        return successResponse(res, withTotals(bill), "Bill Updated Successfully.")
-    } catch (err) {
-        return errorResponse(res, sanitizePrismaError(err))
-    }
-}
-
 const downloadBillPdf = async (req, res) => {
     try {
         const tenant_id = await resolveTenantId(req)
@@ -181,4 +137,4 @@ const downloadBillPdf = async (req, res) => {
     }
 }
 
-module.exports = { createBillFromQuotation, getAllBills, getBillById, updateBill, downloadBillPdf }
+module.exports = { createBillFromQuotation, getAllBills, getBillById, downloadBillPdf }

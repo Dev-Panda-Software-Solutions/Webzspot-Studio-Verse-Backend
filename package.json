@@ -20,6 +20,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1075.0",
     "@aws-sdk/s3-request-presigner": "^3.1076.0",
+    "@neon/config": "^1.1.0",
+    "@neon/env": "^1.1.6",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "archiver": "^6.0.1",

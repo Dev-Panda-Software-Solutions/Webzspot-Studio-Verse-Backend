@@ -1,33 +1,19 @@
 
--- DropForeignKey
-ALTER TABLE "Bill" DROP CONSTRAINT "Bill_billing_client_id_fkey";
-
--- DropForeignKey
-ALTER TABLE "BillingClient" DROP CONSTRAINT "BillingClient_tenant_id_fkey";
-
--- DropForeignKey
-ALTER TABLE "Quotation" DROP CONSTRAINT "Quotation_billing_client_id_fkey";
-
--- DropIndex
-DROP INDEX "Bill_billing_client_id_idx";
-
--- DropIndex
-DROP INDEX "Quotation_billing_client_id_idx";
+-- New billing clients are stored in User, while BillingClient remains for
+-- legacy rows created before this migration. Keep both relation paths nullable
+-- so old and new documents can render through billingAccess.resolveClient().
 
 -- AlterTable
-ALTER TABLE "Bill" DROP COLUMN "billing_client_id",
-ADD COLUMN     "user_id" TEXT NOT NULL;
+ALTER TABLE "Bill" ADD COLUMN     "user_id" TEXT,
+ALTER COLUMN "billing_client_id" DROP NOT NULL;
 
 -- AlterTable
-ALTER TABLE "Quotation" DROP COLUMN "billing_client_id",
-ADD COLUMN     "user_id" TEXT NOT NULL;
+ALTER TABLE "Quotation" ADD COLUMN     "user_id" TEXT,
+ALTER COLUMN "billing_client_id" DROP NOT NULL;
 
 -- AlterTable
 ALTER TABLE "User" ALTER COLUMN "validity_days" DROP NOT NULL,
 ALTER COLUMN "expiry_date" DROP NOT NULL;
-
--- DropTable
-DROP TABLE "BillingClient";
 
 -- CreateIndex
 CREATE INDEX "Bill_user_id_idx" ON "Bill"("user_id");
@@ -36,8 +22,7 @@ CREATE INDEX "Bill_user_id_idx" ON "Bill"("user_id");
 CREATE INDEX "Quotation_user_id_idx" ON "Quotation"("user_id");
 
 -- AddForeignKey
-ALTER TABLE "Quotation" ADD CONSTRAINT "Quotation_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "User"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "Quotation" ADD CONSTRAINT "Quotation_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "User"("user_id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "Bill" ADD CONSTRAINT "Bill_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "User"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
+ALTER TABLE "Bill" ADD CONSTRAINT "Bill_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "User"("user_id") ON DELETE SET NULL ON UPDATE CASCADE;

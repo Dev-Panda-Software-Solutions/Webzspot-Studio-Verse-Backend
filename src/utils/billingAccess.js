@@ -30,6 +30,28 @@ const computeItemsTotal = (items) =>
 const computeBillPayable = (bill) =>
     Math.max(0, computeItemsTotal(bill.items || []) - Number(bill.discount_amount || 0))
 
+const summarizeBillPayment = (bill) => {
+    if (!bill) return null
+    const items_total = computeItemsTotal(bill.items || [])
+    const discount_amount = Number(bill.discount_amount || 0)
+    const payable_amount = Math.max(0, items_total - discount_amount)
+    const payments = (bill.payments || []).filter(p => p.isactive !== false)
+    const paid_amount = payments.reduce((sum, p) => sum + Number(p.amount), 0)
+    const balance_due = Math.max(0, payable_amount - paid_amount)
+
+    return {
+        bill_id: bill.bill_id,
+        bill_number: bill.bill_number,
+        status: bill.status,
+        items_total,
+        discount_amount,
+        payable_amount,
+        paid_amount,
+        balance_due,
+        receipt_count: payments.length,
+    }
+}
+
 // A Quotation/Bill's client is either the new `client` (User) relation, or —
 // for rows created before that migration — the legacy `billing_client`
 // (BillingClient) relation. Normalizes both into the User-shaped object the
@@ -48,4 +70,4 @@ const resolveClient = (record) => {
     return null
 }
 
-module.exports = { resolveTenantId, claimNextNumber, computeItemsTotal, computeBillPayable, resolveClient }
+module.exports = { resolveTenantId, claimNextNumber, computeItemsTotal, computeBillPayable, summarizeBillPayment, resolveClient }

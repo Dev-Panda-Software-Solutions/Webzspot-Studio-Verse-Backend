@@ -10,7 +10,7 @@ const withTotals = (bill) => {
     const payable_amount = Math.max(0, items_total - discount_amount)
     const paid_amount = (bill.payments || []).reduce((sum, p) => sum + Number(p.amount), 0)
     const balance_due = Math.max(0, payable_amount - paid_amount)
-    return { ...bill, client: resolveClient(bill), items_total, payable_amount, paid_amount, balance_due }
+    return { ...bill, client: resolveClient(bill), items_total, payable_amount, paid_amount, balance_due, receipt_count: (bill.payments || []).length }
 }
 
 // Confirming a Quotation is the only way a Bill comes into existence — its
@@ -99,7 +99,7 @@ const getBillById = async (req, res) => {
                 items: { orderBy: { createdAt: "asc" } },
                 client: true,
                 billing_client: true,
-                quotation: { select: { quotation_number: true } },
+                quotation: { select: { quotation_id: true, quotation_number: true } },
                 payments: { where: { isactive: true }, orderBy: { receipt_number: "asc" } }
             }
         })

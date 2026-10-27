@@ -183,8 +183,11 @@ const swapActivePlan = async (current, targetPlan, changeType, userId, extra = {
                 subscription_plan_id: targetPlan.subscription_plan_id,
                 status: "ACTIVE",
                 change_type: changeType,
-                locked_price: null,
-                is_price_locked: false,
+                // Preserve the price that was active for this history row. The
+                // plan catalog can be edited later, so history must not depend
+                // on the catalog's current price to render correctly.
+                locked_price: targetPlan.price,
+                is_price_locked: true,
                 photo_quota_total: targetPlan.photo_quota,
                 photo_quota_used: current.photo_quota_used,
                 starts_at: current.starts_at,

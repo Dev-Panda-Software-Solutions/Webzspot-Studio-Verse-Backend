@@ -341,7 +341,7 @@ const downloadUserFavouritesAsZip = async (req, res) => {
             const [mapping, event] = await Promise.all([
                 prisma.eventUserMapping.findFirst({
                     where: { event_id, user_id: loginRecord.user_id, isactive: true },
-                    select: { event_user_id: true, access_expires: true }
+                    select: { event_user_id: true, access_expires: true, favourites_submitted_at: true }
                 }),
                 prisma.event.findUnique({ where: { event_id }, select: { allow_download: true, isactive: true } })
             ])
@@ -352,6 +352,7 @@ const downloadUserFavouritesAsZip = async (req, res) => {
             if (!event?.isactive) return errorResponse(res, 'Event is not available.', 403)
             if (!event?.allow_download) return errorResponse(res, 'Downloads are disabled for this event by the studio.', 403)
             if (loginRecord.user_id !== user_id) return errorResponse(res, 'You can only download your own favourites.', 403)
+            if (!mapping.favourites_submitted_at) return errorResponse(res, 'Submit your favourites before downloading.', 403)
         } else {
             if (!loginRecord.tenant_id) return errorResponse(res, 'Only tenants can download favourites zip.', 403)
             const tenantAccess = await prisma.eventTenantMapping.findFirst({

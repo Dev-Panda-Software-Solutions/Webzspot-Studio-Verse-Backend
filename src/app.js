@@ -62,13 +62,18 @@ app.set("trust proxy", trustProxyValue)
 // CORS is configured before any other middleware. FRONTEND_URL may contain a
 // comma-separated list, for example:
 // https://webzspot-studio-verse.vercel.app,http://localhost:5173
-const configuredOrigins = String(process.env.FRONTEND_URL || "*")
+const configuredOrigins = String(process.env.FRONTEND_URL || "")
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean)
-const allowAllOrigins = configuredOrigins.includes("*")
-const isAllowedOrigin = (origin) => !origin || allowAllOrigins || configuredOrigins.includes(origin)
-const primaryFrontendUrl = configuredOrigins.find((origin) => origin !== "*") || "http://localhost:3000"
+const fallbackOrigins = [
+    "https://webzspot-studio-verse.vercel.app",
+    "http://localhost:5173",
+]
+const allowedOrigins = [...new Set([...configuredOrigins, ...fallbackOrigins])]
+const allowAllOrigins = allowedOrigins.includes("*")
+const isAllowedOrigin = (origin) => !origin || allowAllOrigins || allowedOrigins.includes(origin)
+const primaryFrontendUrl = allowedOrigins.find((origin) => origin !== "*") || "http://localhost:3000"
 
 app.use((req, res, next) => {
     const origin = req.headers.origin

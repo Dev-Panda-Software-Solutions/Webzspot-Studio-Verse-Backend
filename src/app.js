@@ -59,13 +59,21 @@ const trustProxyValue = (() => {
 })()
 app.set("trust proxy", trustProxyValue)
 
-// Hardcoded, unconditional CORS — set before ANY other middleware (including
-// helmet) so every response carries these headers even if something further
-// down the chain throws. Bearer-token auth (not cookies) is used everywhere
-// in this app, so a literal "*" origin is safe — no credentialed requests
-// depend on echoing a specific origin back.
+// CORS is configured before any other middleware. FRONTEND_URL may contain a
+// comma-separated list, for example:
+// https://webzspot-studio-verse.vercel.app,http://localhost:5173
+const configuredOrigins = String(process.env.FRONTEND_URL || "*")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+const allowAllOrigins = configuredOrigins.includes("*")
+const isAllowedOrigin = (origin) => !origin || allowAllOrigins || configuredOrigins.includes(origin)
+
 app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*")
+    const origin = req.headers.origin
+    if (!isAllowedOrigin(origin)) return next()
+    res.header("Access-Control-Allow-Origin", origin || "*")
+    if (origin && !allowAllOrigins) res.header("Vary", "Origin")
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
     res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
     if (req.method === "OPTIONS") return res.sendStatus(204)
@@ -87,9 +95,7 @@ app.use(helmet({
 }))
 
 const corsOptions = {
-    // Reflect whatever Origin the browser sends — allow every origin. More robust than a
-    // static "*" string across reverse proxies, which can mangle/strip a literal wildcard.
-    origin: true,
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
     optionsSuccessStatus: 204

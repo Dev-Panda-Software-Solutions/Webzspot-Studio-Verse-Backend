@@ -169,7 +169,7 @@ async function main() {
           quotation_id: quotation.quotation_id,
           user_id: USER_ID,
           bill_number: nextBill + i - 1,
-          status: i % 3 === 0 ? 'PARTIALLY_PAID' : i % 3 === 1 ? 'PAID' : 'UNPAID',
+          status: i % 3 === 1 ? 'PAID' : 'PARTIALLY_PAID',
           discount_amount: quotation.discount_amount,
           createdBy: tenantLogin.transid,
           items: { create: [
@@ -180,12 +180,10 @@ async function main() {
       })
       bills.push(bill)
 
-      if (i % 3 !== 2) {
-        const amount = i % 3 === 0 ? Math.floor(total / 2) : total
-        await tx.payment.create({
-          data: { tenant_id: TENANT_ID, bill_id: bill.bill_id, receipt_number: nextReceipt + payments.length, amount: money(amount), method: i % 2 ? 'GPAY' : 'CASH', remark: `${MARKER} payment ${i}`, createdBy: tenantLogin.transid }
-        }).then(payment => payments.push(payment))
-      }
+      const amount = i % 3 === 0 ? Math.floor(total / 2) : i % 3 === 2 ? 100 : total
+      await tx.payment.create({
+        data: { tenant_id: TENANT_ID, bill_id: bill.bill_id, receipt_number: nextReceipt + payments.length, amount: money(amount), method: i % 2 ? 'GPAY' : 'CASH', remark: `${MARKER} payment ${i}`, createdBy: tenantLogin.transid }
+      }).then(payment => payments.push(payment))
 
       await tx.supportTicket.create({
         data: { subject: `${MARKER} Support Ticket ${i}`, description: `Dummy support request ${i} for full UI testing.`, status: ['OPEN', 'IN_PROGRESS', 'RESOLVED'][i % 3], raised_by_role: 'USER', raised_by_name: user.user_name, createdBy: userLogin.transid }

@@ -1,6 +1,7 @@
 const prisma = require("../utils/prismaClient")
 const { withMediaUrl } = require("../utils/mediaUrl")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { isPublishedEvent } = require("../utils/eventVisibility")
 
 const addTenantFavourite = async (req, res) => {
     try {
@@ -98,6 +99,7 @@ const getTenantFavouriteIdsForEventAsUser = async (req, res) => {
             select: { event_user_id: true }
         })
         if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+        if (!await isPublishedEvent(event_id)) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
 
         const ownerMapping = await prisma.eventTenantMapping.findFirst({
             where: { event_id, collaboration_role: 'OWNER', isactive: true },

@@ -6,6 +6,7 @@ const s3Storage = require("../utils/s3Storage")
 const { withMediaUrls, withMediaUrl } = require("../utils/mediaUrl")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 const { assertQuotaAvailable, consumeQuota, SubscriptionAccessError } = require("../utils/subscriptionAccess")
+const { isPublishedEvent } = require("../utils/eventVisibility")
 
 const MAX_LARGE_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -385,6 +386,7 @@ const getAllMediaByEvent = async (req, res) => {
                 select: { event_user_id: true }
             })
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+            if (!await isPublishedEvent(event_id)) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
         }
 
         if (role === "ADMIN") {
@@ -442,6 +444,7 @@ const getMediaById = async (req, res) => {
                 select: { event_user_id: true }
             })
             if (!access) return errorResponse(res, 'You do not have access to this media.', 403)
+            if (!await isPublishedEvent(media.event_id)) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
         }
 
         if (role === "ADMIN") {

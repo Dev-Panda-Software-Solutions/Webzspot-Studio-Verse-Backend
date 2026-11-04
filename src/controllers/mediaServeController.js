@@ -5,6 +5,7 @@ const archiver = require("archiver")
 const prisma = require("../utils/prismaClient")
 const s3Storage = require("../utils/s3Storage")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { isPublishedEvent } = require("../utils/eventVisibility")
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../uploads")
 
@@ -81,6 +82,7 @@ const getMediaToken = async (req, res) => {
 
         const media = await prisma.uploadedMedia.findUnique({ where: { media_id } })
         if (!media || !media.isactive) return errorResponse(res, 'Media not found.', 404)
+        if (loginRecord.user_id && !await isPublishedEvent(media.event_id)) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
 
         if (loginRecord.user_id) {
             const access = await prisma.eventUserMapping.findFirst({
@@ -153,6 +155,7 @@ const serveMedia = async (req, res) => {
 
         const media = await prisma.uploadedMedia.findUnique({ where: { media_id: decoded.media_id } })
         if (!media || !media.isactive) return res.status(404).json({ success: false, message: "Media not found." })
+        if (!await isPublishedEvent(media.event_id)) return res.status(403).json({ success: false, message: "This event has not been published by the studio yet." })
 
         const filePath = media.compressed_server_path || media.media_server_path
         const fileMeta = await getMediaFileMeta(filePath, media.media_type)
@@ -343,13 +346,14 @@ const downloadUserFavouritesAsZip = async (req, res) => {
                     where: { event_id, user_id: loginRecord.user_id, isactive: true },
                     select: { event_user_id: true, access_expires: true, favourites_submitted_at: true }
                 }),
-                prisma.event.findUnique({ where: { event_id }, select: { allow_download: true, isactive: true } })
+                prisma.event.findUnique({ where: { event_id }, select: { allow_download: true, isactive: true, published_at: true } })
             ])
             if (!mapping) return errorResponse(res, 'You do not have access to this event.', 403)
             if (mapping.access_expires && new Date(mapping.access_expires) < new Date()) {
                 return errorResponse(res, 'Your access to this event has expired.', 403)
             }
             if (!event?.isactive) return errorResponse(res, 'Event is not available.', 403)
+            if (!event?.published_at) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
             if (!event?.allow_download) return errorResponse(res, 'Downloads are disabled for this event by the studio.', 403)
             if (loginRecord.user_id !== user_id) return errorResponse(res, 'You can only download your own favourites.', 403)
             if (!mapping.favourites_submitted_at) return errorResponse(res, 'Submit your favourites before downloading.', 403)

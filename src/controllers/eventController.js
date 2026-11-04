@@ -140,7 +140,7 @@ const getAllEvents = async (req, res) => {
         const where = {
             user_id: loginRecord?.user_id,
             isactive: true,
-            event: { isactive: true },
+            event: { isactive: true, published_at: { not: null } },
         }
         const [mappings, total] = await Promise.all([
             prisma.eventUserMapping.findMany({
@@ -187,6 +187,8 @@ const getEventById = async (req, res) => {
                 where: { event_id, tenant_id: loginRecord?.tenant_id, isactive: true }
             })
             if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+            const eventStatus = await prisma.event.findUnique({ where: { event_id }, select: { isactive: true, published_at: true } })
+            if (!eventStatus?.isactive || !eventStatus.published_at) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
         }
 
         if (role === "USER") {

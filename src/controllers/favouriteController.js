@@ -1,6 +1,7 @@
 const prisma = require("../utils/prismaClient")
 const { withMediaUrl } = require("../utils/mediaUrl")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
+const { isPublishedEvent } = require("../utils/eventVisibility")
 
 const addFavourite = async (req, res) => {
     try {
@@ -21,6 +22,7 @@ const addFavourite = async (req, res) => {
         ])
 
         if (!eventAccess) return errorResponse(res, 'You do not have access to this event.', 403)
+        if (!await isPublishedEvent(event_id)) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
         if (!media) return errorResponse(res, 'Media not found in this event.', 404)
         if (eventAccess.favourites_submitted_at) {
             return errorResponse(res, 'Your favourites have been submitted and are locked. Contact your studio to make changes.', 403)
@@ -66,6 +68,7 @@ const getFavouritesByUser = async (req, res) => {
                     select: { event_user_id: true }
                 })
                 if (!access) return errorResponse(res, 'You do not have access to this event.', 403)
+                if (!await isPublishedEvent(event_id)) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
             }
         } else if (role === "ADMIN") {
             const [loginRecord, targetUser] = await Promise.all([
@@ -79,6 +82,7 @@ const getFavouritesByUser = async (req, res) => {
         }
 
         const where = { user_id, isactive: true }
+        if (role === "USER") where.event = { isactive: true, published_at: { not: null } }
         if (event_id) where.event_id = event_id
 
         const favourites = await prisma.userFavouriteMediaMapping.findMany({
@@ -162,6 +166,7 @@ const removeFavourite = async (req, res) => {
             where: { event_id: fav.event_id, user_id: fav.user_id },
             select: { favourites_submitted_at: true }
         })
+        if (role === "USER" && !await isPublishedEvent(fav.event_id)) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
         if (mapping?.favourites_submitted_at) {
             return errorResponse(res, 'These favourites have been submitted and are locked. Contact your studio to make changes.', 403)
         }

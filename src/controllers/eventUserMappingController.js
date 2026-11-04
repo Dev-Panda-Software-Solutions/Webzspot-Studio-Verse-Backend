@@ -1,4 +1,5 @@
 const prisma = require("../utils/prismaClient")
+const { isPublishedEvent } = require("../utils/eventVisibility")
 const { successResponse, errorResponse, sanitizePrismaError } = require("../utils/response")
 const { parseAccessExpiry } = require("../utils/eventAccess")
 
@@ -127,6 +128,7 @@ const submitFavouritesForEvent = async (req, res) => {
         const mapping = await prisma.eventUserMapping.findUnique({ where: { event_user_id: id } })
         if (!mapping) return errorResponse(res, 'Mapping not found.', 404)
         if (mapping.user_id !== loginRecord.user_id) return errorResponse(res, 'You can only submit your own favourites.', 403)
+        if (!await isPublishedEvent(mapping.event_id)) return errorResponse(res, 'This event has not been published by the studio yet.', 403)
         if (!mapping.isactive) return errorResponse(res, 'You do not have access to this event.', 403)
         if (mapping.favourites_submitted_at) return errorResponse(res, 'Favourites have already been submitted.', 400)
 

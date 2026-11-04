@@ -68,6 +68,7 @@ const configuredOrigins = String(process.env.FRONTEND_URL || "*")
     .filter(Boolean)
 const allowAllOrigins = configuredOrigins.includes("*")
 const isAllowedOrigin = (origin) => !origin || allowAllOrigins || configuredOrigins.includes(origin)
+const primaryFrontendUrl = configuredOrigins.find((origin) => origin !== "*") || "http://localhost:3000"
 
 app.use((req, res, next) => {
     const origin = req.headers.origin
@@ -180,7 +181,7 @@ app.listen(PORT, async () => {
     logger.success("BOOT", `Server is running on port ${PORT}`, {
         node_env: process.env.NODE_ENV || "development",
         trust_proxy: trustProxyValue,
-        frontend_url: process.env.FRONTEND_URL || "http://localhost:3000"
+        frontend_url: primaryFrontendUrl
     })
     try {
         const t = Date.now()

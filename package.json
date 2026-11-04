@@ -7,7 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "seed:super-admin": "node scripts/seedSuperAdmin.js"
+    "seed:super-admin": "node scripts/seedSuperAdmin.js",
+    "seed:mohan-ui": "node scripts/seedMohanUiData.js"
   },
   "keywords": [],
   "author": "",

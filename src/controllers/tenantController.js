@@ -100,7 +100,15 @@ const getAllTenants = async (req, res) => {
         const skip = (page - 1) * limit
         // status: "active" (default) | "archived" | "all"
         const status = req.query.status === "archived" ? false : req.query.status === "all" ? undefined : true
-        const where = status === undefined ? {} : { isactive: status }
+        const search = req.query.search?.trim()
+        const where = {
+            ...(status === undefined ? {} : { isactive: status }),
+            ...(search ? { OR: [
+                { tenant_studio_name: { contains: search, mode: 'insensitive' } },
+                { tenant_name: { contains: search, mode: 'insensitive' } },
+                { tenant_email_id: { contains: search, mode: 'insensitive' } }
+            ] } : {})
+        }
         const [rawItems, total] = await Promise.all([
             prisma.tenant.findMany({
                 where, skip, take: limit, orderBy: { createdAt: 'desc' },

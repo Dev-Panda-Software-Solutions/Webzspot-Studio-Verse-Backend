@@ -178,9 +178,10 @@ const getAllUsers = async (req, res) => {
             ]
         }
 
+        const sortField = ['user_name', 'createdAt'].includes(req.query.sort) ? req.query.sort : 'createdAt'
         const [rawItems, total] = await Promise.all([
             prisma.user.findMany({
-                where, skip, take: limit, orderBy: { createdAt: 'desc' },
+                where, skip, take: limit, orderBy: { [sortField]: 'desc' },
                 include: {
                     created_by: { select: { tenant_studio_name: true } },
                     // Same-named clients are easy to confuse in a flat list — surface

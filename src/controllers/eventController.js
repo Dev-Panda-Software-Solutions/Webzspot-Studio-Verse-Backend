@@ -127,7 +127,11 @@ const getAllEvents = async (req, res) => {
             // row, so filtering has to happen on the event itself, not the mapping.
             const status = req.query.status === "archived" ? false : req.query.status === "all" ? undefined : true
             const eventFilter = status === undefined ? {} : { isactive: status }
-            const where = { tenant_id: loginRecord?.tenant_id, event: eventFilter }
+            const search = req.query.search?.trim()
+            const where = { tenant_id: loginRecord?.tenant_id, event: { ...eventFilter, ...(search ? { OR: [
+                { event_name: { contains: search, mode: 'insensitive' } },
+                { event_venue: { contains: search, mode: 'insensitive' } }
+            ] } : {}) } }
             const [mappings, total] = await Promise.all([
                 prisma.eventTenantMapping.findMany({ where, include: { event: true }, skip, take: limit, orderBy: { createdAt: 'desc' } }),
                 prisma.eventTenantMapping.count({ where })
